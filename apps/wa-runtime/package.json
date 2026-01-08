@@ -1,0 +1,17 @@
+{
+  "name": "wa-runtime",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "packageManager": "pnpm@10.25.0",
+  "dependencies": {
+    "bullmq": "^5.66.4",
+    "ioredis": "^5.9.1"
+  }
+}
