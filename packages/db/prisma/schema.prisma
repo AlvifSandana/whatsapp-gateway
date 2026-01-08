@@ -1,0 +1,357 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Workspace {
+  id        String   @id @default(uuid())
+  name      String
+  createdAt DateTime @default(now()) @map("created_at")
+
+  users           User[]
+  waAccounts      WaAccount[]
+  contacts        Contact[]
+  tags            Tag[]
+  campaigns       Campaign[]
+  autoReplyRules  AutoReplyRule[]
+  roles           Role[]
+  contactImportJobs ContactImportJob[]
+  exports         Export[]
+  auditLogs       AuditLog[]
+  messages        Message[]
+
+  @@map("workspaces")
+}
+
+model User {
+  id           String   @id @default(uuid())
+  workspaceId  String   @map("workspace_id")
+  email        String
+  name         String
+  passwordHash String   @map("password_hash")
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  workspace    Workspace  @relation(fields: [workspaceId], references: [id])
+  roles        UserRole[]
+  auditLogs    AuditLog[]
+
+  @@map("users")
+}
+
+model WaAccount {
+  id           String   @id @default(uuid())
+  workspaceId  String   @map("workspace_id")
+  phoneE164    String   @map("phone_e164")
+  label        String?
+  status       String   @default("DISCONNECTED") // CONNECTED, DISCONNECTED
+  lastSeenAt   DateTime? @map("last_seen_at")
+  settings     Json?    @default("{}") // { needs_pairing: boolean }
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  workspace    Workspace          @relation(fields: [workspaceId], references: [id])
+  session      WaAccountSession?
+  keys         WaAccountKey[]
+  campaigns    Campaign[]
+  autoReplyRules AutoReplyRule[]
+  messages     Message[]
+
+  @@map("wa_accounts")
+}
+
+model WaAccountSession {
+  waAccountId String   @id @map("wa_account_id")
+  workspaceId String   @map("workspace_id")
+  credsEnc    Bytes?   @map("creds_enc")
+  keysEnc     Bytes?   @map("keys_enc")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  waAccount   WaAccount @relation(fields: [waAccountId], references: [id], onDelete: Cascade)
+
+  @@map("wa_account_sessions")
+}
+
+model WaAccountKey {
+  waAccountId String   @map("wa_account_id")
+  workspaceId String   @map("workspace_id")
+  category    String
+  keyId       String   @map("key_id")
+  valueEnc    Bytes?   @map("value_enc")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  waAccount   WaAccount @relation(fields: [waAccountId], references: [id], onDelete: Cascade)
+
+  @@id([waAccountId, category, keyId])
+  @@map("wa_account_keys")
+}
+
+model Contact {
+  id          String   @id @default(uuid())
+  workspaceId String   @map("workspace_id")
+  phoneE164   String   @map("phone_e164")
+  displayName String?  @map("display_name")
+  notes       String?
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  workspace   Workspace     @relation(fields: [workspaceId], references: [id])
+  tags        ContactTag[]
+  campaignTargets CampaignTarget[]
+  messages    Message[] @relation("ContactMessages")
+
+  @@unique([workspaceId, phoneE164])
+  @@map("contacts")
+}
+
+model Tag {
+  id          String   @id @default(uuid())
+  workspaceId String   @map("workspace_id")
+  name        String
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  workspace   Workspace    @relation(fields: [workspaceId], references: [id])
+  contacts    ContactTag[]
+
+  @@unique([workspaceId, name])
+  @@map("tags")
+}
+
+model ContactTag {
+  contactId String   @map("contact_id")
+  tagId     String   @map("tag_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  contact   Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  tag       Tag     @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([contactId, tagId])
+  @@index([tagId, contactId])
+  @@map("contact_tags")
+}
+
+model Campaign {
+  id           String   @id @default(uuid())
+  workspaceId  String   @map("workspace_id")
+  name         String
+  status       String   @default("DRAFT") // DRAFT, SCHEDULED, PROCESSING, PAUSED, COMPLETED, CANCELED
+  routingMode  String   @default("ALL") @map("routing_mode")
+  waAccountId  String?  @map("wa_account_id")
+  targetFilter Json?    @map("target_filter")
+  payload      Json
+  scheduleAt   DateTime? @map("schedule_at") @db.Timestamptz
+  settings     Json?    @default("{}")
+  createdBy    String?  @map("created_by")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  workspace    Workspace        @relation(fields: [workspaceId], references: [id])
+  waAccount    WaAccount?       @relation(fields: [waAccountId], references: [id])
+  targets      CampaignTarget[]
+  messages     Message[]
+
+  @@map("campaigns")
+}
+
+model CampaignTarget {
+  campaignId  String   @map("campaign_id")
+  contactId   String   @map("contact_id")
+  status      String   @default("QUEUED") // QUEUED, SENT, DELIVERED, READ, FAILED, CANCELED
+  attemptCount Int     @default(0) @map("attempt_count")
+  lastError   String?  @map("last_error")
+  lastTryAt   DateTime? @map("last_try_at")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  campaign    Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  contact     Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@id([campaignId, contactId])
+  @@map("campaign_targets")
+}
+
+model Message {
+  id              String   @id @default(uuid())
+  workspaceId     String   @map("workspace_id")
+  waAccountId     String   @map("wa_account_id")
+  contactId       String   @map("contact_id")
+  direction       String // IN, OUT
+  status          String // QUEUED, SENT, DELIVERED, READ, FAILED
+  providerMsgId   String?  @map("provider_msg_id")
+  type            String   @default("text")
+  payload         Json
+  errorCode       String?  @map("error_code")
+  errorMessage    String?  @map("error_message")
+  createdBy       String?  @map("created_by")
+  sourceCampaignId String? @map("source_campaign_id")
+  sourceContactId  String? @map("source_contact_id") // Redundant but useful for indexing receipt lookup?
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  workspace       Workspace     @relation(fields: [workspaceId], references: [id])
+  waAccount       WaAccount     @relation(fields: [waAccountId], references: [id])
+  contact         Contact       @relation("ContactMessages", fields: [contactId], references: [id])
+  campaign        Campaign?     @relation(fields: [sourceCampaignId], references: [id])
+  events          MessageEvent[]
+
+  @@index([sourceCampaignId, contactId, createdAt(sort: Desc)])
+  @@map("messages")
+}
+
+model MessageEvent {
+  id        String   @id @default(uuid())
+  messageId String   @map("message_id")
+  event     String   // SENT, DELIVERED, READ, FAILED
+  detail    Json?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  message   Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@map("message_events")
+}
+
+model AutoReplyRule {
+  id             String   @id @default(uuid())
+  workspaceId    String   @map("workspace_id")
+  waAccountId    String?  @map("wa_account_id")
+  name           String
+  isActive       Boolean  @default(true) @map("is_active")
+  priority       Int      @default(0)
+  patternType    String   @map("pattern_type") // KEYWORD, CONTAINS, REGEX
+  patternValue   String   @map("pattern_value")
+  replyMode      String   @map("reply_mode") // STATIC, WEBHOOK
+  replyPayload   Json?    @map("reply_payload")
+  webhookUrl     String?  @map("webhook_url")
+  webhookSecret  String?  @map("webhook_secret")
+  cooldownSeconds Int     @default(0) @map("cooldown_seconds")
+  timeWindow     Json?    @map("time_window")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  workspace      Workspace  @relation(fields: [workspaceId], references: [id])
+  waAccount      WaAccount? @relation(fields: [waAccountId], references: [id])
+
+  @@map("auto_reply_rules")
+}
+
+model AuditLog {
+  id           String   @id @default(uuid())
+  workspaceId  String   @map("workspace_id")
+  actorUserId  String?  @map("actor_user_id")
+  action       String
+  entityType   String   @map("entity_type")
+  entityId     String?  @map("entity_id")
+  beforeJson   Json?    @map("before_json")
+  afterJson    Json?    @map("after_json")
+  metaJson     Json?    @map("meta_json")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  workspace    Workspace @relation(fields: [workspaceId], references: [id])
+  actor        User?     @relation(fields: [actorUserId], references: [id])
+
+  @@map("audit_logs")
+}
+
+model Permission {
+  id          String   @id @default(uuid())
+  code        String   @unique
+  groupName   String   @map("group_name")
+  description String?
+
+  roles       RolePermission[]
+
+  @@map("permissions")
+}
+
+model Role {
+  id          String   @id @default(uuid())
+  workspaceId String   @map("workspace_id")
+  name        String
+  description String?
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  workspace   Workspace        @relation(fields: [workspaceId], references: [id])
+  permissions RolePermission[]
+  users       UserRole[]
+
+  @@unique([workspaceId, name])
+  @@map("roles")
+}
+
+model RolePermission {
+  roleId       String @map("role_id")
+  permissionId String @map("permission_id")
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+model UserRole {
+  userId String @map("user_id")
+  roleId String @map("role_id")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([userId, roleId])
+  @@map("user_roles")
+}
+
+model ContactImportJob {
+  id           String   @id @default(uuid())
+  workspaceId  String   @map("workspace_id")
+  filename     String
+  status       String   // UPLOADED, PROCESSING, READY, COMMITTING, DONE, FAILED
+  totalRows    Int      @default(0) @map("total_rows")
+  validRows    Int      @default(0) @map("valid_rows")
+  invalidRows  Int      @default(0) @map("invalid_rows")
+  duplicateRows Int     @default(0) @map("duplicate_rows")
+  createdBy    String?  @map("created_by")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  workspace    Workspace            @relation(fields: [workspaceId], references: [id])
+  rows         ContactImportRow[]
+
+  @@map("contact_import_jobs")
+}
+
+model ContactImportRow {
+  id              String   @id @default(uuid())
+  jobId           String   @map("job_id")
+  rowNo           Int      @map("row_no")
+  raw             Json
+  normalizedPhone String?  @map("normalized_phone")
+  normalizedName  String?  @map("normalized_name")
+  tags            String[]
+  isValid         Boolean  @map("is_valid")
+  error           String?
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  job             ContactImportJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@map("contact_import_rows")
+}
+
+model Export {
+  id          String   @id @default(uuid())
+  workspaceId String   @map("workspace_id")
+  type        String
+  params      Json?
+  format      String   @default("csv")
+  status      String   // PENDING, PROCESSING, DONE, FAILED
+  fileRef     String?  @map("file_ref")
+  createdBy   String?  @map("created_by")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  workspace   Workspace @relation(fields: [workspaceId], references: [id])
+
+  @@map("exports")
+}
