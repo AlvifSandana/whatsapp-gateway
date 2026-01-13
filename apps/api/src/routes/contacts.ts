@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { prisma } from "@repo/db";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
-import { logAudit } from "../lib/audit";
+import { logAudit } from "@repo/shared";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { redis } from "../redis";

@@ -3,7 +3,6 @@ import { WASocket } from "@whiskeysockets/baileys";
 import pino from "pino";
 import crypto from "crypto";
 import dns from "dns/promises";
-import RE2 from "re2";
 import { redis } from "../redis";
 import { config } from "../config";
 
@@ -24,6 +23,20 @@ type TimeWindow = {
 type WebhookAction = {
     type: string;
     text?: string;
+};
+
+let re2Loaded = false;
+let re2Module: any = null;
+
+const loadRe2 = async () => {
+    if (re2Loaded) return re2Module;
+    re2Loaded = true;
+    try {
+        re2Module = await import("re2");
+    } catch {
+        re2Module = null;
+    }
+    return re2Module;
 };
 
 export class AutoReplyService {
@@ -240,7 +253,11 @@ export class AutoReplyService {
                     if (patternValue.length > config.autoReplyRegexMaxLength) {
                         this.logger.warn({ ruleId: rule.id }, "Regex pattern too long");
                     } else {
-                        const regex = new RE2(patternValue, "i");
+                        const mod = await loadRe2();
+                        const Re2Ctor = mod?.default || mod;
+                        const regex = Re2Ctor
+                            ? new Re2Ctor(patternValue, "i")
+                            : new RegExp(patternValue, "i");
                         match = regex.test(msg.text);
                     }
                 } catch (e) {

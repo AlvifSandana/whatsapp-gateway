@@ -1,0 +1,14 @@
+---
+import Layout from "../../layouts/Layout.astro";
+import ConnectAccountDialog from "../../components/numbers/ConnectAccountDialog";
+import NumbersTable from "../../components/numbers/NumbersTable";
+---
+
+<Layout title="Numbers">
+    <div class="flex items-center justify-between mb-8">
+        <h1 class="text-3xl font-bold tracking-tight">Numbers</h1>
+        <ConnectAccountDialog client:load />
+    </div>
+
+    <NumbersTable client:load accounts={[]} />
+</Layout>

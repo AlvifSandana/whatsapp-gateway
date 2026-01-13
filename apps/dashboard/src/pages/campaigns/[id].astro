@@ -1,0 +1,23 @@
+---
+import Layout from "../../layouts/Layout.astro";
+import CampaignMessages from "../../components/campaigns/CampaignMessages";
+import CampaignTargetPreview from "../../components/campaigns/CampaignTargetPreview";
+import CampaignHeader from "../../components/campaigns/CampaignHeader";
+
+const { id } = Astro.params;
+---
+
+<Layout title="Campaign Detail">
+    <div class="mb-4">
+        <a href="/campaigns" class="text-sm text-muted-foreground hover:underline">
+            ← Back to Campaigns
+        </a>
+    </div>
+    <CampaignHeader client:load campaignId={id} />
+
+    <div class="mb-6">
+        <CampaignTargetPreview client:load campaignId={id} />
+    </div>
+
+    <CampaignMessages client:load campaignId={id} />
+</Layout>

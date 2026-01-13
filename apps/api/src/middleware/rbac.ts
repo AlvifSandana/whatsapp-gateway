@@ -1,5 +1,5 @@
 import type { Context, Next } from "hono";
-import { getUserPermissionCodes } from "../lib/rbac";
+import { getUserPermissionCodes } from "@repo/shared";
 
 export const getRequiredPermission = (method: string, path: string) => {
   const is = (pattern: RegExp) => pattern.test(path);

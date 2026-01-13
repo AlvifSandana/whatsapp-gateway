@@ -93,10 +93,14 @@ pnpm dev
 pnpm --filter api dev
 pnpm --filter dashboard dev
 pnpm --filter wa-runtime dev
+pnpm --filter worker dev
 ```
 
 - **Dashboard**: http://localhost:4321
 - **API**: http://localhost:3000
+
+> If you run the standalone worker, set `EXPORT_WORKER_ENABLED=false` and
+> `CONTACT_IMPORT_WORKER_ENABLED=false` in the API env to avoid duplicate jobs.
 
 ## 📖 API Documentation
 

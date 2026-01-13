@@ -2,8 +2,8 @@ import { Hono } from "hono";
 import { z } from "zod";
 import { zValidator } from "@hono/zod-validator";
 import { prisma } from "@repo/db";
-import { redis, pubSubPublisher } from "../redis";
-import { logAudit } from "../lib/audit";
+import { redis } from "../redis";
+import { logAudit } from "@repo/shared";
 
 const app = new Hono();
 
@@ -19,7 +19,6 @@ const threadsQuerySchema = z.object({
 app.get("/threads", zValidator("query", threadsQuerySchema), async (c) => {
   const auth = c.get("auth") as any;
   const workspaceId = auth.workspaceId;
-  const permissions = (c.get("permissions") as string[]) || [];
   const query = c.req.valid("query");
 
   const where: any = { workspaceId };
@@ -128,19 +127,15 @@ app.post("/send", zValidator("json", sendSchema), async (c) => {
     },
   });
 
-  await pubSubPublisher.publish(
-    "cmd:wa-runtime",
-    JSON.stringify({
-      type: "SEND_MESSAGE",
-      waAccountId: account.id,
-      payload: { to: contact.phoneE164, payload, dbMessageId: message.id },
-      meta: {
-        userId: auth.userId,
-        workspaceId,
-        permissions,
-      },
-    }),
-  );
+  try {
+    await redis.rpush("q:message:send", JSON.stringify({ messageId: message.id }));
+  } catch (err) {
+    await prisma.message.update({
+      where: { id: message.id },
+      data: { status: "FAILED", errorCode: "QUEUE_FAILED" },
+    });
+    return c.json({ error: "Failed to queue message" }, 500);
+  }
 
   await logAudit({
     workspaceId,

@@ -3,7 +3,7 @@ import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
 import { prisma } from "@repo/db";
 import { redis } from "../redis";
-import { logAudit } from "../lib/audit";
+import { logAudit } from "@repo/shared";
 
 const app = new Hono();
 
@@ -40,6 +40,7 @@ app.put(
       waAccountId: z.string().nullable().optional(),
       message: z.string().optional(),
       tagIds: z.array(z.string()).optional(),
+      contactIds: z.array(z.string()).optional(),
       scheduleAt: z.string().datetime().nullable().optional(),
     }),
   ),
@@ -71,6 +72,8 @@ app.put(
     const nextPayload =
       input.message !== undefined ? { type: "text", text: input.message } : campaign.payload;
     const nextTagIds = input.tagIds ?? (campaign.targetFilter as any)?.tagIds ?? [];
+    const nextContactIds =
+      input.contactIds ?? (campaign.targetFilter as any)?.contactIds ?? [];
 
     const updated = await prisma.campaign.update({
       where: { id },
@@ -78,12 +81,13 @@ app.put(
         name: input.name ?? campaign.name,
         waAccountId: input.waAccountId === undefined ? campaign.waAccountId : input.waAccountId,
         payload: nextPayload,
-        targetFilter: { tagIds: nextTagIds },
+        targetFilter: { tagIds: nextTagIds, contactIds: nextContactIds },
         scheduleAt: input.scheduleAt === undefined ? campaign.scheduleAt : input.scheduleAt ? new Date(input.scheduleAt) : null,
       },
     });
 
     await prisma.campaignTarget.deleteMany({ where: { campaignId: id } });
+    const targetContactIds = new Set<string>();
     if (nextTagIds.length > 0) {
       const contacts = await prisma.contact.findMany({
         where: {
@@ -92,16 +96,24 @@ app.put(
         },
         select: { id: true },
       });
-      if (contacts.length > 0) {
-        await prisma.campaignTarget.createMany({
-          data: contacts.map((contact) => ({
-            campaignId: id,
-            contactId: contact.id,
-            status: "QUEUED",
-          })),
-          skipDuplicates: true,
-        });
-      }
+      contacts.forEach((contact) => targetContactIds.add(contact.id));
+    }
+    if (nextContactIds.length > 0) {
+      const contacts = await prisma.contact.findMany({
+        where: { workspaceId: auth.workspaceId, id: { in: nextContactIds } },
+        select: { id: true },
+      });
+      contacts.forEach((contact) => targetContactIds.add(contact.id));
+    }
+    if (targetContactIds.size > 0) {
+      await prisma.campaignTarget.createMany({
+        data: Array.from(targetContactIds).map((contactId) => ({
+          campaignId: id,
+          contactId,
+          status: "QUEUED",
+        })),
+        skipDuplicates: true,
+      });
     }
 
     await logAudit({
@@ -127,11 +139,12 @@ app.post(
       waAccountId: z.string().optional(), // Sender (optional for routing)
       message: z.string(),
       tagIds: z.array(z.string()).optional(), // Target by tags
+      contactIds: z.array(z.string()).optional(), // Target specific contacts
       scheduleAt: z.string().datetime().optional(),
     }),
   ),
   async (c) => {
-    const { name, waAccountId, message, tagIds, scheduleAt } = c.req.valid("json");
+    const { name, waAccountId, message, tagIds, contactIds, scheduleAt } = c.req.valid("json");
     const auth = c.get("auth") as any;
     const workspaceId = auth.workspaceId;
 
@@ -152,31 +165,40 @@ app.post(
         name,
         status: "DRAFT",
         waAccountId: waAccountId || null,
-        targetFilter: tagIds ? { tagIds } : undefined,
+        targetFilter: tagIds || contactIds ? { tagIds: tagIds || [], contactIds: contactIds || [] } : undefined,
         payload: { type: "text", text: message },
         scheduleAt: scheduleAt ? new Date(scheduleAt) : null,
       },
     });
 
     // Add Targets
+    const targetContactIds = new Set<string>();
     if (tagIds && tagIds.length > 0) {
       const contacts = await prisma.contact.findMany({
         where: {
           workspaceId,
           tags: { some: { tagId: { in: tagIds } } },
         },
+        select: { id: true },
       });
-
-      if (contacts.length > 0) {
-        await prisma.campaignTarget.createMany({
-          data: contacts.map((c) => ({
-            campaignId: campaign.id,
-            contactId: c.id,
-            status: "QUEUED",
-          })),
-          skipDuplicates: true,
-        });
-      }
+      contacts.forEach((contact) => targetContactIds.add(contact.id));
+    }
+    if (contactIds && contactIds.length > 0) {
+      const contacts = await prisma.contact.findMany({
+        where: { workspaceId, id: { in: contactIds } },
+        select: { id: true },
+      });
+      contacts.forEach((contact) => targetContactIds.add(contact.id));
+    }
+    if (targetContactIds.size > 0) {
+      await prisma.campaignTarget.createMany({
+        data: Array.from(targetContactIds).map((contactId) => ({
+          campaignId: campaign.id,
+          contactId,
+          status: "QUEUED",
+        })),
+        skipDuplicates: true,
+      });
     }
 
     await logAudit({
@@ -187,7 +209,7 @@ app.post(
       afterJson: {
         name,
         status: "DRAFT",
-        targetCount: tagIds ? campaign._count?.targets : 0,
+        targetCount: targetContactIds.size,
       },
     });
 
@@ -209,23 +231,30 @@ app.post("/:id/preview-targets", async (c) => {
   const tagIds = Array.isArray(body?.tagIds)
     ? body.tagIds
     : (campaign.targetFilter as any)?.tagIds;
+  const contactIds = Array.isArray(body?.contactIds)
+    ? body.contactIds
+    : (campaign.targetFilter as any)?.contactIds;
 
-  if (!tagIds || tagIds.length === 0) {
+  if ((!tagIds || tagIds.length === 0) && (!contactIds || contactIds.length === 0)) {
     return c.json({ data: { total: 0, sample: [] } });
   }
 
-  const total = await prisma.contact.count({
-    where: {
-      workspaceId: campaign.workspaceId,
-      tags: { some: { tagId: { in: tagIds } } },
-    },
-  });
+  const where: any = { workspaceId: campaign.workspaceId };
+  const filters: any[] = [];
+  if (Array.isArray(tagIds) && tagIds.length > 0) {
+    filters.push({ tags: { some: { tagId: { in: tagIds } } } });
+  }
+  if (Array.isArray(contactIds) && contactIds.length > 0) {
+    filters.push({ id: { in: contactIds } });
+  }
+  if (filters.length > 0) {
+    where.OR = filters;
+  }
+
+  const total = await prisma.contact.count({ where });
 
   const sample = await prisma.contact.findMany({
-    where: {
-      workspaceId: campaign.workspaceId,
-      tags: { some: { tagId: { in: tagIds } } },
-    },
+    where,
     take: 10,
     select: { id: true, phoneE164: true, displayName: true },
   });
@@ -254,49 +283,18 @@ app.post("/:id/start", async (c) => {
     return c.json({ message: "Campaign scheduled" });
   }
 
-  if (campaign.targets.length === 0) {
-    const tagIds = (campaign.targetFilter as any)?.tagIds;
-    if (Array.isArray(tagIds) && tagIds.length > 0) {
-      const contacts = await prisma.contact.findMany({
-        where: {
-          workspaceId: campaign.workspaceId,
-          tags: { some: { tagId: { in: tagIds } } },
-        },
-      });
-      if (contacts.length > 0) {
-        await prisma.campaignTarget.createMany({
-          data: contacts.map((contact) => ({
-            campaignId: campaign.id,
-            contactId: contact.id,
-            status: "QUEUED",
-          })),
-          skipDuplicates: true,
-        });
-      }
-    }
-  }
-
   await prisma.campaign.update({
     where: { id },
     data: { status: "PROCESSING" },
   });
-
-  const targets = await prisma.campaignTarget.findMany({
-    where: { campaignId: campaign.id, status: "QUEUED" },
-    select: { contactId: true },
-  });
-
-  if (targets.length === 0) {
+  try {
+    await redis.rpush("q:campaign:plan", JSON.stringify({ campaignId: campaign.id }));
+  } catch (err) {
     await prisma.campaign.update({
       where: { id },
-      data: { status: "COMPLETED" },
+      data: { status: "DRAFT" },
     });
-    return c.json({ message: "Campaign has no targets" });
-  }
-
-  for (const target of targets) {
-    const job = { campaignId: campaign.id, contactId: target.contactId };
-    await redis.rpush("q:campaign:send", JSON.stringify(job));
+    return c.json({ error: "Failed to queue campaign" }, 500);
   }
 
   await logAudit({
@@ -305,10 +303,10 @@ app.post("/:id/start", async (c) => {
     entityType: "Campaign",
     entityId: campaign.id,
     beforeJson: { status: campaign.status },
-    afterJson: { status: "PROCESSING", messageCount: targets.length },
+    afterJson: { status: "PROCESSING" },
   });
 
-  return c.json({ message: "Campaign started" });
+  return c.json({ message: "Campaign queued" });
 });
 
 // Pause Campaign

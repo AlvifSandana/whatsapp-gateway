@@ -25,8 +25,8 @@ import teamRoutes from "./routes/team";
 import workspaceRoutes from "./routes/workspace";
 import rbacRoutes from "./routes/rbac";
 import reportsRoutes from "./routes/reports";
-import { startExportWorker } from "./workers/export-worker";
-import { startContactImportWorker } from "./workers/contact-import-worker";
+import { startExportWorker, startContactImportWorker } from "@repo/workers";
+import { pubSubPublisher, redis } from "./redis";
 
 app.use("*", logger());
 app.use(
@@ -61,13 +61,51 @@ app.route("/v1/reports", reportsRoutes);
 pinoLogger.info(`Server is starting on port ${config.port}`);
 
 if (config.exportWorkerEnabled) {
-  startExportWorker();
+  startExportWorker({ eventPublisher: pubSubPublisher.publish.bind(pubSubPublisher) });
   pinoLogger.info("Export worker started");
 }
 if (config.contactImportWorkerEnabled) {
   startContactImportWorker();
   pinoLogger.info("Contact import worker started");
 }
+
+const queueMetrics = [
+  "q:campaign:plan",
+  "q:campaign:send",
+  "q:message:send",
+  "q:contacts:import:validate",
+  "q:contacts:import:commit",
+  "q:reports:export",
+];
+
+setInterval(async () => {
+  try {
+    const lengths = await Promise.all(queueMetrics.map((key) => redis.llen(key)));
+    const activeKeys = queueMetrics.map((key) => `metrics:q:${key}:active`);
+    const failedKeys = queueMetrics.map((key) => `metrics:q:${key}:failed`);
+    const [actives, faileds] = await Promise.all([
+      redis.mget(activeKeys),
+      redis.mget(failedKeys),
+    ]);
+    const payload = queueMetrics.reduce<Record<string, number>>((acc, key, idx) => {
+      acc[key] = lengths[idx] ?? 0;
+      acc[`${key}:active`] = Number(actives[idx] || 0);
+      acc[`${key}:failed`] = Number(faileds[idx] || 0);
+      acc[`${key}:delayed`] = 0;
+      return acc;
+    }, {});
+    await pubSubPublisher.publish(
+      "ev:global",
+      JSON.stringify({
+        type: "queue.metrics",
+        payload,
+        timestamp: new Date().toISOString(),
+      }),
+    );
+  } catch (err) {
+    pinoLogger.warn({ err }, "Failed to publish queue metrics");
+  }
+}, 5000);
 
 serve(
   {

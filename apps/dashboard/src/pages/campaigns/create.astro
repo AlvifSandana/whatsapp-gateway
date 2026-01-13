@@ -1,0 +1,19 @@
+---
+import Layout from "../../layouts/Layout.astro";
+import CampaignWizard from "../../components/campaigns/CampaignWizard";
+---
+
+<Layout title="New Campaign">
+    <div class="mb-4">
+        <a
+            href="/campaigns"
+            class="text-sm text-muted-foreground hover:underline"
+            >← Back to Campaigns</a
+        >
+    </div>
+    <div class="mb-8">
+        <h1 class="text-3xl font-bold tracking-tight">Create Campaign</h1>
+    </div>
+
+    <CampaignWizard client:load />
+</Layout>

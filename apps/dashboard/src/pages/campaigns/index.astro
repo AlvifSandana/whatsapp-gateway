@@ -1,0 +1,16 @@
+---
+import Layout from "../../layouts/Layout.astro";
+import { Button } from "../../components/ui/button";
+import CampaignList from "../../components/campaigns/CampaignList";
+---
+
+<Layout title="Campaigns">
+    <div class="flex items-center justify-between mb-8">
+        <h1 class="text-3xl font-bold tracking-tight">Campaigns</h1>
+        <a href="/campaigns/create">
+            <Button>Create Campaign</Button>
+        </a>
+    </div>
+
+    <CampaignList client:load />
+</Layout>

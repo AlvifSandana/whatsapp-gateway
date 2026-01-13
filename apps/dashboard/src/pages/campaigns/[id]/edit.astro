@@ -1,0 +1,18 @@
+---
+import Layout from "../../../layouts/Layout.astro";
+import CampaignWizard from "../../../components/campaigns/CampaignWizard";
+
+const { id } = Astro.params;
+---
+
+<Layout title="Edit Campaign">
+    <div class="mb-4">
+        <a href={`/campaigns/${id}`} class="text-sm text-muted-foreground hover:underline">
+            ← Back to Campaign
+        </a>
+    </div>
+    <div class="mb-8">
+        <h1 class="text-3xl font-bold tracking-tight">Edit Campaign</h1>
+    </div>
+    <CampaignWizard client:load campaignId={id} />
+</Layout>

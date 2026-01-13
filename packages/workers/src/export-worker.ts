@@ -3,10 +3,8 @@ import pino from "pino";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { prisma } from "@repo/db";
-import { config } from "../config";
-import { buildContactsCsv, buildMessagesCsv } from "../lib/reports";
-import { logAudit } from "../lib/audit";
-import { getUserPermissionCodes } from "../lib/rbac";
+import { buildContactsCsv, buildMessagesCsv, getUserPermissionCodes, logAudit } from "@repo/shared";
+import { config } from "./config";
 
 const logger = pino({ level: config.logLevel });
 
@@ -18,10 +16,15 @@ export const canProcessExport = (job: { type: string }, permissions: string[]) =
   return ["contacts", "messages"].includes(job.type) && permissions.includes("reports:export");
 };
 
-export const startExportWorker = () => {
+export const startExportWorker = (options?: {
+  eventPublisher?: (channel: string, message: string) => Promise<void>;
+}) => {
   const queueRedis = new Redis(config.redisUrl, {
     maxRetriesPerRequest: null,
   });
+  const publishEvent = options?.eventPublisher
+    ? options.eventPublisher
+    : (channel: string, message: string) => queueRedis.publish(channel, message);
 
   const retryKey = (exportId: string) => `export:attempts:${exportId}`;
 
@@ -44,6 +47,18 @@ export const startExportWorker = () => {
     return true;
   };
 
+  const publishStatus = async (exportId: string, workspaceId: string | undefined, status: string) => {
+    const channel = workspaceId ? `ev:ws:${workspaceId}` : "ev:global";
+    await publishEvent(
+      channel,
+      JSON.stringify({
+        type: "export.status",
+        payload: { exportId, workspaceId, status },
+        timestamp: new Date().toISOString(),
+      }),
+    );
+  };
+
   const run = async () => {
     while (true) {
       const res = await queueRedis.blpop("q:reports:export", 0);
@@ -51,9 +66,14 @@ export const startExportWorker = () => {
       const payload = JSON.parse(res[1]) as ExportJobPayload;
       if (!payload?.exportId) continue;
 
+      let job: Awaited<ReturnType<typeof prisma.export.findUnique>> | null = null;
       try {
-        const job = await prisma.export.findUnique({ where: { id: payload.exportId } });
-        if (!job) continue;
+        await queueRedis.incr("metrics:q:q:reports:export:active");
+        job = await prisma.export.findUnique({ where: { id: payload.exportId } });
+        if (!job) {
+          await queueRedis.decr("metrics:q:q:reports:export:active");
+          continue;
+        }
 
         if (!job.createdBy) {
           await prisma.export.update({
@@ -67,6 +87,7 @@ export const startExportWorker = () => {
             entityId: job.id,
             afterJson: { reason: "missing_creator" },
           });
+          await queueRedis.decr("metrics:q:q:reports:export:active");
           continue;
         }
 
@@ -83,6 +104,7 @@ export const startExportWorker = () => {
             entityId: job.id,
             afterJson: { reason: "missing_permission", userId: job.createdBy },
           });
+          await queueRedis.decr("metrics:q:q:reports:export:active");
           continue;
         }
 
@@ -91,6 +113,7 @@ export const startExportWorker = () => {
             where: { id: job.id },
             data: { status: "FAILED" },
           });
+          await queueRedis.decr("metrics:q:q:reports:export:active");
           continue;
         }
 
@@ -98,6 +121,7 @@ export const startExportWorker = () => {
           where: { id: job.id },
           data: { status: "PROCESSING" },
         });
+        await publishStatus(job.id, job.workspaceId, "PROCESSING");
 
         const csv =
           job.type === "messages"
@@ -114,6 +138,7 @@ export const startExportWorker = () => {
           data: { status: "DONE", fileRef: filename },
         });
         await queueRedis.del(retryKey(job.id));
+        await publishStatus(job.id, job.workspaceId, "DONE");
 
         await logAudit({
           workspaceId: job.workspaceId,
@@ -122,8 +147,12 @@ export const startExportWorker = () => {
           entityId: job.id,
           afterJson: { fileRef: filename },
         });
+        await queueRedis.decr("metrics:q:q:reports:export:active");
       } catch (err) {
         logger.error(err, "Export worker error");
+        await queueRedis.decr("metrics:q:q:reports:export:active");
+        await queueRedis.incr("metrics:q:q:reports:export:failed");
+        await publishStatus(payload.exportId, job?.workspaceId, "FAILED");
         await scheduleRetry(payload.exportId);
       }
     }

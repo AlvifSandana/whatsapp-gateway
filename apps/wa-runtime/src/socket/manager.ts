@@ -8,6 +8,7 @@ import makeWASocket, {
 } from "@whiskeysockets/baileys";
 import { redis, pubSubPublisher } from "../redis";
 import { prisma } from "@repo/db";
+import { logAudit } from "@repo/shared";
 import { usePostgresAuthState } from "../store/auth";
 import pino from "pino";
 import { config } from "../config";
@@ -18,10 +19,32 @@ const logger = pino({ level: config.logLevel });
 
 export class SocketManager {
     private sockets: Map<string, WASocket> = new Map();
+    private reconnectAttempts: Map<string, number> = new Map();
+
+    private async incrementMetric(baseKey: string, windowKey: string) {
+        await redis.incr(baseKey);
+        const count = await redis.incr(windowKey);
+        if (count === 1) {
+            await redis.expire(windowKey, 60 * 60);
+        }
+    }
+
+    private async logStatus(workspaceId: string | undefined, waAccountId: string, action: string, meta?: any) {
+        if (!workspaceId) return;
+        await logAudit({
+            workspaceId,
+            action,
+            entityType: "WaAccount",
+            entityId: waAccountId,
+            metaJson: meta,
+        });
+    }
 
     private async publishEvent(type: string, payload: any) {
         const event = { type, payload, timestamp: new Date().toISOString() };
-        await pubSubPublisher.publish("ev:wa-runtime", JSON.stringify(event));
+        const workspaceId = payload?.workspaceId;
+        const channel = workspaceId ? `ev:ws:${workspaceId}` : "ev:global";
+        await pubSubPublisher.publish(channel, JSON.stringify(event));
     }
 
     private statusRank(status: string) {
@@ -98,6 +121,10 @@ export class SocketManager {
             if (dbMessageId) {
                 await prisma.message.update({ where: { id: dbMessageId }, data: { status: "FAILED", errorCode: "NO_SOCKET" } });
             }
+            await this.incrementMetric(
+                `metrics:wa:${waAccountId}:failed`,
+                `metrics:wa:${waAccountId}:failed:1h`,
+            );
             return false;
         }
 
@@ -124,12 +151,20 @@ export class SocketManager {
                     data: { messageId: dbMessageId, event: "SENT" }
                 });
             }
+            await this.incrementMetric(
+                `metrics:wa:${waAccountId}:sent`,
+                `metrics:wa:${waAccountId}:sent:1h`,
+            );
             return true;
         } catch (e) {
             logger.error({ waAccountId, err: e }, "Failed to send message");
             if (dbMessageId) {
                 await prisma.message.update({ where: { id: dbMessageId }, data: { status: "FAILED", errorMessage: String(e) } });
             }
+            await this.incrementMetric(
+                `metrics:wa:${waAccountId}:failed`,
+                `metrics:wa:${waAccountId}:failed:1h`,
+            );
             return false;
         }
     }
@@ -202,6 +237,7 @@ export class SocketManager {
                     where: { id: waAccountId },
                     data: { status: "QR_READY" }
                 });
+                await this.logStatus(workspaceId, waAccountId, "wa_account.qr_ready");
             }
 
             if (connection === "close") {
@@ -217,6 +253,7 @@ export class SocketManager {
                     where: { id: waAccountId },
                     data: { status: "DISCONNECTED", lastSeenAt: new Date() }
                 });
+                await this.logStatus(workspaceId, waAccountId, "wa_account.disconnected", { reason });
                 await redis.srem("wa:connected", waAccountId);
 
                 await this.publishEvent("numbers.status", {
@@ -229,14 +266,19 @@ export class SocketManager {
                 if (reason !== DisconnectReason.loggedOut) {
                     // Reconnect logic
                     // In a real runner, we might use a queue or backoff
-                    logger.info("Reconnecting...");
-                    setTimeout(() => this.start(waAccountId), 3000);
+                    const attempt = (this.reconnectAttempts.get(waAccountId) || 0) + 1;
+                    this.reconnectAttempts.set(waAccountId, attempt);
+                    const delay = Math.min(30000, 2000 * Math.pow(2, attempt - 1));
+                    logger.info({ delay, attempt }, "Reconnecting...");
+                    setTimeout(() => this.start(waAccountId), delay);
                 } else {
                     logger.error("Logged out. Manual intervention required.");
+                    await this.logStatus(workspaceId, waAccountId, "wa_account.logged_out", { reason });
                     // Potentially clear creds?
                 }
             } else if (connection === "open") {
                 logger.info({ waAccountId }, "Connection opened");
+                this.reconnectAttempts.delete(waAccountId);
 
                 // Refresh lock loop
                 const lockInterval = setInterval(async () => {
@@ -252,6 +294,7 @@ export class SocketManager {
                     where: { id: waAccountId },
                     data: { status: "CONNECTED", lastSeenAt: new Date() }
                 });
+                await this.logStatus(workspaceId, waAccountId, "wa_account.connected");
                 await redis.sadd("wa:connected", waAccountId);
 
                 await this.publishEvent("numbers.status", {
@@ -281,6 +324,10 @@ export class SocketManager {
                     msg.message.imageMessage?.caption || "";
 
                 if (workspaceId && phoneE164) {
+                    await this.incrementMetric(
+                        `metrics:wa:${waAccountId}:incoming`,
+                        `metrics:wa:${waAccountId}:incoming:1h`,
+                    );
                     const contact = await prisma.contact.upsert({
                         where: {
                             workspaceId_phoneE164: {
@@ -377,15 +424,16 @@ export class SocketManager {
         }
         await redis.srem("wa:connected", waAccountId);
         try {
-            await prisma.waAccount.update({
+            const account = await prisma.waAccount.update({
                 where: { id: waAccountId },
                 data: { status: "DISCONNECTED", lastSeenAt: new Date() },
             });
             await this.publishEvent("numbers.status", {
                 waAccountId,
-                workspaceId,
+                workspaceId: account.workspaceId,
                 status: "DISCONNECTED",
             });
+            await this.logStatus(account.workspaceId, waAccountId, "wa_account.disconnected");
         } catch (err) {
             logger.warn({ waAccountId, err }, "Failed to update account on stop");
         }

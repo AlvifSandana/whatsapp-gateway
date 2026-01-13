@@ -2,11 +2,23 @@ import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
 import { prisma } from "@repo/db";
-import { logAudit } from "../lib/audit";
-import RE2 from "re2";
+import { logAudit } from "@repo/shared";
 import { config } from "../config";
 
 const app = new Hono();
+let re2Loaded = false;
+let re2Module: any = null;
+
+const loadRe2 = async () => {
+  if (re2Loaded) return re2Module;
+  re2Loaded = true;
+  try {
+    re2Module = await import("re2");
+  } catch {
+    re2Module = null;
+  }
+  return re2Module;
+};
 
 const timeWindowSchema = z.object({
   start: z.string().regex(/^\d{2}:\d{2}$/),
@@ -241,7 +253,11 @@ app.post(
         if (rule.patternValue.length > config.autoReplyRegexMaxLength) {
           return c.json({ error: "Regex pattern too long." }, 400);
         }
-        const regex = new RE2(rule.patternValue, "i");
+        const mod = await loadRe2();
+        const Re2Ctor = mod?.default || mod;
+        const regex = Re2Ctor
+          ? new Re2Ctor(rule.patternValue, "i")
+          : new RegExp(rule.patternValue, "i");
         match = regex.test(text);
       } catch {
         return c.json({ error: "Invalid regex in rule." }, 400);

@@ -12,10 +12,20 @@ export const eventBus = new EventEmitter();
 
 redis.on("error", (err) => logger.error(err, "Redis error"));
 
-pubSubSubscriber.subscribe("ev:wa-runtime", (err) => {
-    if (err) logger.error(err, "Failed to subscribe");
+pubSubSubscriber.subscribe("ev:global", (err) => {
+    if (err) logger.error(err, "Failed to subscribe to global events");
+});
+pubSubSubscriber.psubscribe("ev:ws:*", (err) => {
+    if (err) logger.error(err, "Failed to subscribe to workspace events");
+});
+pubSubSubscriber.psubscribe("ack:ws:*", (err) => {
+    if (err) logger.error(err, "Failed to subscribe to ack events");
 });
 
 pubSubSubscriber.on("message", (channel, message) => {
+    eventBus.emit("message", channel, message);
+});
+
+pubSubSubscriber.on("pmessage", (_pattern, channel, message) => {
     eventBus.emit("message", channel, message);
 });

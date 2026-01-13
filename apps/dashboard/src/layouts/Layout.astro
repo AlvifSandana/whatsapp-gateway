@@ -1,0 +1,429 @@
+---
+import ToastHost from "../components/ui/toast-host";
+import AuthGate from "../components/auth/AuthGate";
+import ProfileSection from "../components/auth/ProfileSection";
+import { API_URL } from "../lib/api";
+import SidebarController from "../components/layout/SidebarController";
+const { title = "WA Gateway" } = Astro.props;
+---
+
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="description" content="WhatsApp Gateway Dashboard" />
+        <meta name="viewport" content="width=device-width" />
+        <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+        <meta name="generator" content={Astro.generator} />
+        <title>{title}</title>
+        <script is:inline define:vars={{ apiUrl: API_URL }}>
+            (() => {
+                if (typeof window === "undefined") return;
+                const tokenKey = "wa_gateway_token";
+                const apiBaseUrl = apiUrl;
+                window.API_URL = apiBaseUrl;
+                const path = window.location.pathname;
+                const isLogin = path === "/login" || path === "/login/";
+                const token = window.localStorage.getItem(tokenKey);
+                if (!token && !isLogin) {
+                    window.location.href = "/login";
+                    return;
+                }
+                if (token && isLogin) {
+                    window.location.href = "/numbers";
+                    return;
+                }
+                const originalFetch = window.fetch.bind(window);
+                window.fetch = (input, init = {}) => {
+                    const headers = new Headers(init.headers || {});
+                    const currentToken = window.localStorage.getItem(tokenKey);
+                    if (currentToken) {
+                        const url = typeof input === "string" ? input : input.url;
+                        if (url.startsWith(apiBaseUrl)) {
+                            headers.set("Authorization", "Bearer " + currentToken);
+                        }
+                    }
+                    return originalFetch(input, { ...init, headers });
+                };
+            })();
+        </script>
+        <script is:inline>
+            (() => {
+                if (typeof window === "undefined") return;
+                const storageKey = "wa_theme";
+                const setThemeAttr = (value) => {
+                    const root = document.documentElement;
+                    if (value === "dark") {
+                        root.setAttribute("data-theme", "dark");
+                        root.classList.add("theme-dark");
+                        if (document.body) {
+                            document.body.setAttribute("data-theme", "dark");
+                            document.body.classList.add("theme-dark");
+                        }
+                    } else {
+                        root.removeAttribute("data-theme");
+                        root.classList.remove("theme-dark");
+                        if (document.body) {
+                            document.body.removeAttribute("data-theme");
+                            document.body.classList.remove("theme-dark");
+                        }
+                    }
+                };
+                const syncToggle = (value) => {
+                    const label = document.getElementById("theme-toggle-label");
+                    if (label) {
+                        label.textContent = value === "dark" ? "Light mode" : "Dark mode";
+                    }
+                    const checkbox = document.getElementById("theme-toggle");
+                    if (checkbox) {
+                        checkbox.checked = value === "dark";
+                    }
+                };
+                const applyTheme = (value) => {
+                    const next = value === "dark" ? "dark" : "light";
+                    const themeVars = {
+                        light: {
+                            background: "0 0% 100%",
+                            foreground: "222.2 84% 4.9%",
+                            card: "0 0% 100%",
+                            "card-foreground": "222.2 84% 4.9%",
+                            popover: "0 0% 100%",
+                            "popover-foreground": "222.2 84% 4.9%",
+                            primary: "222.2 47.4% 11.2%",
+                            "primary-foreground": "210 40% 98%",
+                            secondary: "210 40% 96.1%",
+                            "secondary-foreground": "222.2 47.4% 11.2%",
+                            muted: "210 40% 96.1%",
+                            "muted-foreground": "215.4 16.3% 46.9%",
+                            accent: "210 40% 96.1%",
+                            "accent-foreground": "222.2 47.4% 11.2%",
+                            destructive: "0 84.2% 60.2%",
+                            "destructive-foreground": "210 40% 98%",
+                            border: "214.3 31.8% 91.4%",
+                            input: "214.3 31.8% 91.4%",
+                            ring: "222.2 84% 4.9%",
+                        },
+                        dark: {
+                            background: "222.2 84% 4.9%",
+                            foreground: "210 40% 98%",
+                            card: "222.2 84% 4.9%",
+                            "card-foreground": "210 40% 98%",
+                            popover: "222.2 84% 4.9%",
+                            "popover-foreground": "210 40% 98%",
+                            primary: "210 40% 98%",
+                            "primary-foreground": "222.2 47.4% 11.2%",
+                            secondary: "217.2 32.6% 17.5%",
+                            "secondary-foreground": "210 40% 98%",
+                            muted: "217.2 32.6% 17.5%",
+                            "muted-foreground": "215 20.2% 65.1%",
+                            accent: "217.2 32.6% 17.5%",
+                            "accent-foreground": "210 40% 98%",
+                            destructive: "0 62.8% 30.6%",
+                            "destructive-foreground": "210 40% 98%",
+                            border: "217.2 32.6% 17.5%",
+                            input: "217.2 32.6% 17.5%",
+                            ring: "212.7 26.8% 83.9%",
+                        },
+                    };
+                    const vars = themeVars[next];
+                    Object.entries(vars).forEach(([key, val]) => {
+                        document.documentElement.style.setProperty("--" + key, val);
+                    });
+                    setThemeAttr(next);
+                    syncToggle(next);
+                };
+                const stored = window.localStorage.getItem(storageKey);
+                const initial = stored || "light";
+                window.localStorage.setItem(storageKey, initial);
+                setThemeAttr(initial);
+                window.toggleTheme = () => {
+                    const checkbox = document.getElementById("theme-toggle");
+                    const next = checkbox && checkbox.checked ? "dark" : "light";
+                    window.localStorage.setItem(storageKey, next);
+                    applyTheme(next);
+                };
+                window.addEventListener("DOMContentLoaded", () => {
+                    applyTheme(initial);
+                });
+            })();
+        </script>
+        <style is:global>
+            @import "tailwindcss";
+
+            @theme {
+                --color-background: hsl(var(--background));
+                --color-foreground: hsl(var(--foreground));
+                --color-card: hsl(var(--card));
+                --color-card-foreground: hsl(var(--card-foreground));
+                --color-popover: hsl(var(--popover));
+                --color-popover-foreground: hsl(var(--popover-foreground));
+                --color-primary: hsl(var(--primary));
+                --color-primary-foreground: hsl(var(--primary-foreground));
+                --color-secondary: hsl(var(--secondary));
+                --color-secondary-foreground: hsl(var(--secondary-foreground));
+                --color-muted: hsl(var(--muted));
+                --color-muted-foreground: hsl(var(--muted-foreground));
+                --color-accent: hsl(var(--accent));
+                --color-accent-foreground: hsl(var(--accent-foreground));
+                --color-destructive: hsl(var(--destructive));
+                --color-destructive-foreground: hsl(var(--destructive-foreground));
+                --color-border: hsl(var(--border));
+                --color-input: hsl(var(--input));
+                --color-ring: hsl(var(--ring));
+
+                --radius-radius: var(--radius);
+            }
+
+            :root {
+                --background: 0 0% 100%;
+                --foreground: 222.2 84% 4.9%;
+                --card: 0 0% 100%;
+                --card-foreground: 222.2 84% 4.9%;
+                --popover: 0 0% 100%;
+                --popover-foreground: 222.2 84% 4.9%;
+                --primary: 222.2 47.4% 11.2%;
+                --primary-foreground: 210 40% 98%;
+                --secondary: 210 40% 96.1%;
+                --secondary-foreground: 222.2 47.4% 11.2%;
+                --muted: 210 40% 96.1%;
+                --muted-foreground: 215.4 16.3% 46.9%;
+                --accent: 210 40% 96.1%;
+                --accent-foreground: 222.2 47.4% 11.2%;
+                --destructive: 0 84.2% 60.2%;
+                --destructive-foreground: 210 40% 98%;
+                --border: 214.3 31.8% 91.4%;
+                --input: 214.3 31.8% 91.4%;
+                --ring: 222.2 84% 4.9%;
+                --radius: 0.5rem;
+            }
+
+            :root.theme-dark,
+            body.theme-dark,
+            :root[data-theme="dark"],
+            body[data-theme="dark"] {
+                --background: 222.2 84% 4.9%;
+                --foreground: 210 40% 98%;
+                --card: 222.2 84% 4.9%;
+                --card-foreground: 210 40% 98%;
+                --popover: 222.2 84% 4.9%;
+                --popover-foreground: 210 40% 98%;
+                --primary: 210 40% 98%;
+                --primary-foreground: 222.2 47.4% 11.2%;
+                --secondary: 217.2 32.6% 17.5%;
+                --secondary-foreground: 210 40% 98%;
+                --muted: 217.2 32.6% 17.5%;
+                --muted-foreground: 215 20.2% 65.1%;
+                --accent: 217.2 32.6% 17.5%;
+                --accent-foreground: 210 40% 98%;
+                --destructive: 0 62.8% 30.6%;
+                --destructive-foreground: 210 40% 98%;
+                --border: 217.2 32.6% 17.5%;
+                --input: 217.2 32.6% 17.5%;
+                --ring: 212.7 26.8% 83.9%;
+                color-scheme: dark;
+            }
+
+
+            @layer base {
+                body {
+                    @apply bg-background text-foreground;
+                }
+                * {
+                    @apply border-border;
+                }
+            }
+
+            .nav-item {
+                @apply flex items-center gap-2 rounded-md px-2 py-1.5 text-sm text-muted-foreground hover:bg-muted hover:text-foreground;
+            }
+            .nav-item[data-active="true"] {
+                @apply bg-emerald-50 text-emerald-700 border border-emerald-100;
+            }
+            .sidebar-icon {
+                @apply inline-flex h-7 w-7 items-center justify-center rounded-md border bg-background text-xs font-semibold text-muted-foreground;
+            }
+            .nav-item[data-active="true"] .sidebar-icon {
+                @apply border-emerald-200 text-emerald-700 bg-emerald-100;
+            }
+            body[data-theme="dark"] .nav-item[data-active="true"] {
+                @apply bg-emerald-950/40 text-emerald-200 border-emerald-900/60;
+            }
+            body[data-theme="dark"] .nav-item[data-active="true"] .sidebar-icon {
+                @apply border-emerald-900/60 text-emerald-200 bg-emerald-950/60;
+            }
+
+            body[data-sidebar="collapsed"] .sidebar {
+                width: 4.5rem;
+            }
+            body[data-sidebar="collapsed"] .sidebar-label {
+                display: none;
+            }
+            body[data-sidebar="collapsed"] .sidebar-profile-details,
+            body[data-sidebar="collapsed"] .sidebar-profile-actions {
+                display: none;
+            }
+            body[data-sidebar="collapsed"] .sidebar-profile {
+                padding: 0.5rem;
+            }
+            body[data-sidebar="collapsed"] .sidebar-profile-logout button {
+                justify-content: center;
+            }
+            body[data-sidebar="collapsed"] .sidebar-profile-caret,
+            body[data-sidebar="collapsed"] .sidebar-profile-body {
+                display: none;
+            }
+            body[data-sidebar="collapsed"] .sidebar-toggle {
+                margin-left: auto;
+            }
+
+            .sidebar nav::-webkit-scrollbar {
+                width: 8px;
+            }
+            .sidebar nav::-webkit-scrollbar-track {
+                background: transparent;
+            }
+            .sidebar nav::-webkit-scrollbar-thumb {
+                background: hsl(var(--border));
+                border-radius: 999px;
+                border: 2px solid transparent;
+                background-clip: padding-box;
+            }
+            body.theme-dark .sidebar nav::-webkit-scrollbar-thumb,
+            body[data-theme="dark"] .sidebar nav::-webkit-scrollbar-thumb {
+                background: hsl(var(--muted-foreground));
+                background-clip: padding-box;
+            }
+            .sidebar nav {
+                scrollbar-width: thin;
+                scrollbar-color: hsl(var(--border)) transparent;
+            }
+            body.theme-dark .sidebar nav,
+            body[data-theme="dark"] .sidebar nav {
+                scrollbar-color: hsl(var(--muted-foreground)) transparent;
+            }
+            main::-webkit-scrollbar {
+                width: 10px;
+            }
+            main::-webkit-scrollbar-track {
+                background: transparent;
+            }
+            main::-webkit-scrollbar-thumb {
+                background: hsl(var(--border));
+                border-radius: 999px;
+                border: 3px solid transparent;
+                background-clip: padding-box;
+            }
+            body.theme-dark main::-webkit-scrollbar-thumb,
+            body[data-theme="dark"] main::-webkit-scrollbar-thumb {
+                background: hsl(var(--muted-foreground));
+                background-clip: padding-box;
+            }
+            main {
+                scrollbar-width: thin;
+                scrollbar-color: hsl(var(--border)) transparent;
+            }
+            body.theme-dark main,
+            body[data-theme="dark"] main {
+                scrollbar-color: hsl(var(--muted-foreground)) transparent;
+            }
+        </style>
+    </head>
+    <body class="min-h-screen bg-background font-sans antialiased">
+        <div class="flex h-screen">
+            <!-- Sidebar -->
+            <aside class="sidebar sticky top-0 flex h-screen w-64 flex-col border-r bg-muted/40 p-4 transition-all duration-200">
+                <div class="mb-6 flex items-center justify-between gap-2 px-2 font-semibold">
+                    <span class="sidebar-label">WA Gateway</span>
+                    <button
+                        id="sidebar-toggle"
+                        type="button"
+                        class="sidebar-toggle rounded-md border bg-background px-2 py-1 text-xs text-muted-foreground hover:text-foreground"
+                        title="Toggle sidebar"
+                        aria-label="Toggle sidebar"
+                    >
+                        ☰
+                    </button>
+                </div>
+                <nav class="flex-1 space-y-1 overflow-y-auto pr-1">
+                    <a href="/numbers" class="nav-item" title="Numbers">
+                        <span class="sidebar-icon">N</span>
+                        <span class="sidebar-label">Numbers</span>
+                    </a>
+                    <a href="/messages" class="nav-item" title="Inbox">
+                        <span class="sidebar-icon">I</span>
+                        <span class="sidebar-label">Inbox</span>
+                    </a>
+                    <a href="/contacts" class="nav-item" title="Contacts">
+                        <span class="sidebar-icon">C</span>
+                        <span class="sidebar-label">Contacts</span>
+                    </a>
+                    <a href="/campaigns" class="nav-item" title="Campaigns">
+                        <span class="sidebar-icon">B</span>
+                        <span class="sidebar-label">Campaigns</span>
+                    </a>
+                    <a href="/reports" class="nav-item" title="Reports">
+                        <span class="sidebar-icon">E</span>
+                        <span class="sidebar-label">Reports</span>
+                    </a>
+                    <a href="/rules" class="nav-item" title="Auto-reply">
+                        <span class="sidebar-icon">R</span>
+                        <span class="sidebar-label">Auto-reply</span>
+                    </a>
+                    <div class="pt-4 pb-2">
+                        <h4 class="px-2 text-xs font-semibold tracking-tight text-muted-foreground sidebar-label">
+                            Settings
+                        </h4>
+                        <nav class="grid gap-1">
+                            <a href="/settings/workspace" class="nav-item" title="Workspace">
+                                <span class="sidebar-icon">W</span>
+                                <span class="sidebar-label">Workspace</span>
+                            </a>
+                            <a href="/settings/team" class="nav-item" title="Team">
+                                <span class="sidebar-icon">T</span>
+                                <span class="sidebar-label">Team</span>
+                            </a>
+                            <a href="/settings/roles" class="nav-item" title="Roles">
+                                <span class="sidebar-icon">P</span>
+                                <span class="sidebar-label">Roles</span>
+                            </a>
+                            <a href="/settings/tags" class="nav-item" title="Tags">
+                                <span class="sidebar-icon">G</span>
+                                <span class="sidebar-label">Tags</span>
+                            </a>
+                            <a href="/audit" class="nav-item" title="Audit Log">
+                                <span class="sidebar-icon">A</span>
+                                <span class="sidebar-label">Audit Log</span>
+                            </a>
+                        </nav>
+                    </div>
+                </nav>
+                <div class="mt-auto pt-3">
+                    <div class="mb-3 rounded-md border bg-background/60 px-3 py-2 text-xs text-muted-foreground">
+                        <label class="flex items-center justify-between gap-2 text-xs font-semibold text-muted-foreground">
+                            <span id="theme-toggle-label">Dark mode</span>
+                            <span class="relative inline-flex h-5 w-10 items-center">
+                                <input
+                                    id="theme-toggle"
+                                    type="checkbox"
+                                    class="peer sr-only"
+                                    onclick="window.toggleTheme && window.toggleTheme()"
+                                />
+                                <span class="h-5 w-10 rounded-full border bg-background transition peer-checked:bg-emerald-600"></span>
+                                <span class="absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-background shadow transition peer-checked:translate-x-5"></span>
+                            </span>
+                        </label>
+                    </div>
+                    <ProfileSection client:load />
+                </div>
+            </aside>
+
+            <!-- Main Content -->
+            <main class="flex-1 overflow-y-auto p-8">
+                <slot />
+            </main>
+        </div>
+        <AuthGate client:load />
+        <SidebarController client:load />
+        <ToastHost client:load />
+    </body>
+</html>

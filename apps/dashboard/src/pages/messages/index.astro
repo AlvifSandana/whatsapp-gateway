@@ -1,0 +1,17 @@
+---
+import Layout from "../../layouts/Layout.astro";
+import Inbox from "../../components/messages/Inbox";
+---
+
+<Layout title="Inbox">
+    <div class="flex items-center justify-between mb-8">
+        <div>
+            <h1 class="text-3xl font-bold tracking-tight">Inbox</h1>
+            <p class="text-sm text-muted-foreground">
+                Kirim pesan manual dan pantau percakapan masuk.
+            </p>
+        </div>
+    </div>
+
+    <Inbox client:load />
+</Layout>

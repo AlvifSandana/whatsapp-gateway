@@ -3,7 +3,7 @@ import { z } from "zod";
 import { zValidator } from "@hono/zod-validator";
 import { prisma } from "@repo/db";
 import { createToken, hashPassword, hashToken, verifyPassword } from "../lib/auth";
-import { ensureDefaultRoles } from "../lib/rbac";
+import { ensureDefaultRoles } from "@repo/shared";
 
 const app = new Hono();
 

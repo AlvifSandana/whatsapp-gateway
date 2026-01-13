@@ -1,0 +1,16 @@
+---
+import Layout from "../../layouts/Layout.astro";
+import ImportContactsDialog from "../../components/contacts/ImportContactsDialog";
+import ContactsTable from "../../components/contacts/ContactsTable";
+---
+
+<Layout title="Contacts">
+    <div class="flex items-center justify-between mb-8">
+        <h1 class="text-3xl font-bold tracking-tight">Contacts</h1>
+        <div class="flex gap-2">
+            <ImportContactsDialog client:load />
+        </div>
+    </div>
+
+    <ContactsTable client:load contacts={[]} />
+</Layout>

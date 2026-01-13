@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 import { zValidator } from "@hono/zod-validator";
 import { prisma } from "@repo/db";
-import { logAudit } from "../lib/audit";
+import { logAudit } from "@repo/shared";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
@@ -70,14 +70,6 @@ app.post("/exports", zValidator("json", exportSchema), async (c) => {
       createdBy: auth.userId,
     },
   });
-
-  if (input.type !== "contacts") {
-    await prisma.export.update({
-      where: { id: exportJob.id },
-      data: { status: "FAILED" },
-    });
-    return c.json({ error: "Unsupported export type" }, 400);
-  }
 
   try {
     await redis.rpush("q:reports:export", JSON.stringify({ exportId: exportJob.id }));

@@ -1,0 +1,12 @@
+---
+import Layout from "../../layouts/Layout.astro";
+import AuditLogViewer from "../../components/audit/AuditLogViewer";
+---
+
+<Layout title="Audit Log">
+    <div class="flex items-center justify-between mb-8">
+        <h1 class="text-3xl font-bold tracking-tight">Audit Log</h1>
+    </div>
+
+    <AuditLogViewer client:load initialData={[]} />
+</Layout>

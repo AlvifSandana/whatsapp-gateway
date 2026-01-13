@@ -4,8 +4,8 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { parse } from "csv-parse/sync";
 import { prisma } from "@repo/db";
-import { config } from "../config";
-import { logAudit } from "../lib/audit";
+import { logAudit } from "@repo/shared";
+import { config } from "./config";
 
 const logger = pino({ level: config.logLevel });
 
@@ -90,7 +90,7 @@ const buildRows = async (jobId: string, workspaceId: string, records: Record<str
   });
 };
 
-const validateJob = async (payload: ImportJobPayload) => {
+const validateJob = async (queueRedis: Redis, payload: ImportJobPayload) => {
   const job = await prisma.contactImportJob.findUnique({
     where: { id: payload.jobId },
   });
@@ -102,6 +102,7 @@ const validateJob = async (payload: ImportJobPayload) => {
   });
 
   try {
+    await queueRedis.incr("metrics:q:q:contacts:import:validate:active");
     const records = await parseCsvFile(job.id);
     const rows = await buildRows(job.id, job.workspaceId, records);
 
@@ -137,8 +138,11 @@ const validateJob = async (payload: ImportJobPayload) => {
       entityId: job.id,
       afterJson: { filename: job.filename, totalRows, validRows, invalidRows, duplicateRows },
     });
+    await queueRedis.decr("metrics:q:q:contacts:import:validate:active");
   } catch (err) {
     logger.error({ err, jobId: job.id }, "Failed to validate import");
+    await queueRedis.decr("metrics:q:q:contacts:import:validate:active");
+    await queueRedis.incr("metrics:q:q:contacts:import:validate:failed");
     await prisma.contactImportJob.update({
       where: { id: job.id },
       data: { status: "FAILED" },
@@ -146,7 +150,7 @@ const validateJob = async (payload: ImportJobPayload) => {
   }
 };
 
-const commitJob = async (payload: ImportJobPayload) => {
+const commitJob = async (queueRedis: Redis, payload: ImportJobPayload) => {
   const job = await prisma.contactImportJob.findUnique({
     where: { id: payload.jobId },
   });
@@ -166,6 +170,7 @@ const commitJob = async (payload: ImportJobPayload) => {
   });
 
   try {
+    await queueRedis.incr("metrics:q:q:contacts:import:commit:active");
     for (const row of rows) {
       if (!row.normalizedPhone) continue;
       await prisma.contact.upsert({
@@ -210,8 +215,11 @@ const commitJob = async (payload: ImportJobPayload) => {
       entityId: job.id,
       afterJson: { imported: rows.length },
     });
+    await queueRedis.decr("metrics:q:q:contacts:import:commit:active");
   } catch (err) {
     logger.error({ err, jobId: job.id }, "Failed to commit import");
+    await queueRedis.decr("metrics:q:q:contacts:import:commit:active");
+    await queueRedis.incr("metrics:q:q:contacts:import:commit:failed");
     await prisma.contactImportJob.update({
       where: { id: job.id },
       data: { status: "FAILED" },
@@ -235,9 +243,9 @@ export const startContactImportWorker = () => {
       const payload = JSON.parse(res[1]) as ImportJobPayload;
       if (!payload?.jobId) continue;
       if (queue === "q:contacts:import:validate") {
-        await validateJob(payload);
+        await validateJob(queueRedis, payload);
       } else {
-        await commitJob(payload);
+        await commitJob(queueRedis, payload);
       }
     }
   };

@@ -3,7 +3,7 @@ import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
 import { prisma } from "@repo/db";
 import { redis, pubSubPublisher } from "../redis";
-import { logAudit } from "../lib/audit";
+import { logAudit } from "@repo/shared";
 
 const app = new Hono();
 
@@ -11,12 +11,74 @@ const app = new Hono();
 app.get("/", async (c) => {
   const auth = c.get("auth") as any;
   const workspaceId = auth.workspaceId;
+  const includeMetrics = c.req.query("includeMetrics") === "true";
 
   const accounts = await prisma.waAccount.findMany({
     where: { workspaceId },
     orderBy: { createdAt: "desc" },
   });
-  return c.json({ data: accounts });
+  if (!includeMetrics || accounts.length === 0) {
+    return c.json({ data: accounts });
+  }
+
+  const metricKeys = accounts.flatMap((account) => [
+    `metrics:wa:${account.id}:sent`,
+    `metrics:wa:${account.id}:failed`,
+    `metrics:wa:${account.id}:incoming`,
+    `metrics:wa:${account.id}:sent:1h`,
+    `metrics:wa:${account.id}:failed:1h`,
+    `metrics:wa:${account.id}:incoming:1h`,
+  ]);
+  const metrics = await redis.mget(metricKeys);
+  const data = accounts.map((account, index) => {
+    const base = index * 6;
+    return {
+      ...account,
+      metrics: {
+        sent: Number(metrics[base] || 0),
+        failed: Number(metrics[base + 1] || 0),
+        incoming: Number(metrics[base + 2] || 0),
+        sent1h: Number(metrics[base + 3] || 0),
+        failed1h: Number(metrics[base + 4] || 0),
+        incoming1h: Number(metrics[base + 5] || 0),
+      },
+    };
+  });
+
+  return c.json({ data });
+});
+
+app.get("/:id/metrics", async (c) => {
+  const id = c.req.param("id");
+  const auth = c.get("auth") as any;
+  const account = await prisma.waAccount.findFirst({
+    where: { id, workspaceId: auth.workspaceId },
+    select: { id: true },
+  });
+  if (!account) return c.json({ error: "Not found" }, 404);
+
+  const [sent, failed, incoming] = await redis.mget(
+    `metrics:wa:${id}:sent`,
+    `metrics:wa:${id}:failed`,
+    `metrics:wa:${id}:incoming`,
+  );
+  const [sent1h, failed1h, incoming1h] = await redis.mget(
+    `metrics:wa:${id}:sent:1h`,
+    `metrics:wa:${id}:failed:1h`,
+    `metrics:wa:${id}:incoming:1h`,
+  );
+
+  return c.json({
+    data: {
+      waAccountId: id,
+      sent: Number(sent || 0),
+      failed: Number(failed || 0),
+      incoming: Number(incoming || 0),
+      sent1h: Number(sent1h || 0),
+      failed1h: Number(failed1h || 0),
+      incoming1h: Number(incoming1h || 0),
+    },
+  });
 });
 
 // Create Account

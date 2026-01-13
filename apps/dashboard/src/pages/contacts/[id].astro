@@ -1,0 +1,21 @@
+---
+import Layout from "../../layouts/Layout.astro";
+import ContactMessages from "../../components/contacts/ContactMessages";
+import ContactHeader from "../../components/contacts/ContactHeader";
+import ContactNotes from "../../components/contacts/ContactNotes";
+
+const { id } = Astro.params;
+---
+
+<Layout title="Contact Detail">
+    <div class="mb-4">
+        <a href="/contacts" class="text-sm text-muted-foreground hover:underline">
+            ← Back to Contacts
+        </a>
+    </div>
+    <ContactHeader client:load contactId={id} />
+
+    <ContactNotes client:load contactId={id} />
+
+    <ContactMessages client:load contactId={id} />
+</Layout>

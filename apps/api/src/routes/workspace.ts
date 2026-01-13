@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 import { zValidator } from "@hono/zod-validator";
 import { prisma } from "@repo/db";
-import { logAudit } from "../lib/audit";
+import { logAudit } from "@repo/shared";
 
 const app = new Hono();
 

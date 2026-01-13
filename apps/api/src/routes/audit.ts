@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import { zValidator } from "@hono/zod-validator";
-import { getAuditLogs } from "../lib/audit";
+import { getAuditLogs } from "@repo/shared";
 
 const app = new Hono();
 

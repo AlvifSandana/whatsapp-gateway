@@ -11,12 +11,14 @@ app.get("/", (c) => {
         const listener = (channel: string, message: string) => {
             // We only care about events relevant to frontend
             // Assuming all published events are JSON
-            try {
-                const parsed = JSON.parse(message);
-                const eventWorkspaceId = parsed?.payload?.workspaceId;
-                if (eventWorkspaceId && eventWorkspaceId !== workspaceId) return;
-            } catch (err) {
-                console.error("Failed to parse SSE event", err);
+            if (channel.startsWith("ev:ws:")) {
+                const channelWorkspace = channel.split(":")[2];
+                if (channelWorkspace && channelWorkspace !== workspaceId) return;
+            } else if (channel.startsWith("ack:ws:")) {
+                const channelWorkspace = channel.split(":")[2];
+                if (channelWorkspace && channelWorkspace !== workspaceId) return;
+            } else if (channel !== "ev:global") {
+                return;
             }
             stream.writeSSE({
                 data: message,

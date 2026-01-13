@@ -1,0 +1,26 @@
+---
+import "../styles/global.css";
+import AuthForm from "../components/auth/AuthForm";
+---
+
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width" />
+        <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+        <title>Login</title>
+        <script is:inline>
+            {`(() => {
+                if (typeof window === "undefined") return;
+                const token = window.localStorage.getItem("wa_gateway_token");
+                if (token) window.location.href = "/numbers";
+            })();`}
+        </script>
+    </head>
+    <body class="min-h-screen bg-gradient-to-br from-slate-50 via-white to-emerald-50 font-sans antialiased">
+        <div class="min-h-screen flex items-center justify-center p-6">
+            <AuthForm client:load />
+        </div>
+    </body>
+</html>

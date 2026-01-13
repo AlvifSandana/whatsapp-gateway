@@ -29,6 +29,12 @@ importers:
       '@repo/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@repo/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
+      '@repo/workers':
+        specifier: workspace:*
+        version: link:../../packages/workers
       csv-parse:
         specifier: ^6.1.0
         version: 6.1.0
@@ -45,7 +51,7 @@ importers:
         specifier: ^8.19.0
         version: 8.21.0
       re2:
-        specifier: ^1.21.3
+        specifier: ^1.23.0
         version: 1.23.0
       zod:
         specifier: ^3.22.4
@@ -126,6 +132,9 @@ importers:
       '@repo/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@repo/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
       '@whiskeysockets/baileys':
         specifier: ^6.7.9
         version: 6.17.16(eslint@9.39.2(jiti@2.6.1))(link-preview-js@3.2.0)(qrcode-terminal@0.12.0)(typescript@5.9.3)
@@ -148,7 +157,7 @@ importers:
         specifier: ^0.12.0
         version: 0.12.0
       re2:
-        specifier: ^1.21.3
+        specifier: ^1.23.0
         version: 1.23.0
     devDependencies:
       '@types/node':
@@ -157,6 +166,34 @@ importers:
       '@types/qrcode-terminal':
         specifier: ^0.12.2
         version: 0.12.2
+      tsx:
+        specifier: ^4.7.1
+        version: 4.21.0
+      typescript:
+        specifier: ^5.7.3
+        version: 5.9.3
+
+  apps/worker:
+    dependencies:
+      '@repo/db':
+        specifier: workspace:*
+        version: link:../../packages/db
+      '@repo/workers':
+        specifier: workspace:*
+        version: link:../../packages/workers
+      dotenv:
+        specifier: ^16.4.1
+        version: 16.6.1
+      ioredis:
+        specifier: ^5.3.2
+        version: 5.9.1
+      pino:
+        specifier: ^8.19.0
+        version: 8.21.0
+    devDependencies:
+      '@types/node':
+        specifier: ^20.11.16
+        version: 20.19.27
       tsx:
         specifier: ^4.7.1
         version: 4.21.0
@@ -179,6 +216,33 @@ importers:
       typescript:
         specifier: ^5.7.3
         version: 5.9.3
+
+  packages/shared:
+    dependencies:
+      '@repo/db':
+        specifier: workspace:*
+        version: link:../db
+
+  packages/workers:
+    dependencies:
+      '@repo/db':
+        specifier: workspace:*
+        version: link:../db
+      '@repo/shared':
+        specifier: workspace:*
+        version: link:../shared
+      csv-parse:
+        specifier: ^6.1.0
+        version: 6.1.0
+      dotenv:
+        specifier: ^16.4.1
+        version: 16.6.1
+      ioredis:
+        specifier: ^5.3.2
+        version: 5.9.1
+      pino:
+        specifier: ^8.19.0
+        version: 8.21.0
 
 packages:
 
