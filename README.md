@@ -111,6 +111,16 @@ The API endpoints are served at `http://localhost:3000/v1`.
 - `POST /v1/contacts/import` - Upload CSV for contacts.
 - `POST /v1/campaigns` - Create broadcast campaigns.
 
+## ✅ Production Readiness
+
+See `docs/production-checklist.md` and `docs/runbook-dlq.md`.
+
+## 🔁 CI/CD
+
+- CI workflow: `.github/workflows/ci.yml`
+- Deploy workflow (manual): `.github/workflows/deploy.yml`
+- Deploy script placeholder: `scripts/deploy.sh`
+
 ## 🤝 Contributing
 
 Contributions are welcome! Please fork the repository and submit a pull request for any enhancements or bug fixes.
