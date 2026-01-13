@@ -8,6 +8,10 @@ import pino from "pino";
 import { authMiddleware } from "./middleware/auth";
 import { workspaceMiddleware } from "./middleware/workspace";
 import { rbacMiddleware } from "./middleware/rbac";
+import { rateLimitMiddleware } from "./middleware/rate-limit";
+import { securityHeadersMiddleware } from "./middleware/security-headers";
+import { requestIdMiddleware } from "./middleware/request-id";
+import { prisma } from "@repo/db";
 
 const pinoLogger = pino({ level: config.logLevel });
 
@@ -25,21 +29,35 @@ import teamRoutes from "./routes/team";
 import workspaceRoutes from "./routes/workspace";
 import rbacRoutes from "./routes/rbac";
 import reportsRoutes from "./routes/reports";
+import queuesRoutes from "./routes/queues";
+import metricsRoutes from "./routes/metrics";
 import { startExportWorker, startContactImportWorker } from "@repo/workers";
-import { pubSubPublisher, redis } from "./redis";
+import { pubSubPublisher, pubSubSubscriber, redis } from "./redis";
 
+app.use("*", requestIdMiddleware);
 app.use("*", logger());
 app.use(
   "*",
   cors({
-    origin: "*",
+    origin: config.corsOrigin.length === 1 ? config.corsOrigin[0] : config.corsOrigin,
     allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowHeaders: ["Content-Type", "X-Workspace-ID", "Authorization"],
   }),
 );
+app.use("*", securityHeadersMiddleware);
 
 app.get("/health", (c) => c.json({ status: "ok" }));
+app.get("/health/ready", async (c) => {
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    await redis.ping();
+    return c.json({ status: "ready" });
+  } catch (err) {
+    return c.json({ status: "not_ready" }, 503);
+  }
+});
 
+app.use("/v1/*", rateLimitMiddleware);
 app.use("/v1/*", authMiddleware);
 app.use("/v1/*", workspaceMiddleware);
 app.use("/v1/*", rbacMiddleware);
@@ -57,6 +75,8 @@ app.route("/v1/team", teamRoutes);
 app.route("/v1/workspace", workspaceRoutes);
 app.route("/v1/rbac", rbacRoutes);
 app.route("/v1/reports", reportsRoutes);
+app.route("/v1/queues", queuesRoutes);
+app.route("/v1/metrics", metricsRoutes);
 
 pinoLogger.info(`Server is starting on port ${config.port}`);
 
@@ -72,7 +92,9 @@ if (config.contactImportWorkerEnabled) {
 const queueMetrics = [
   "q:campaign:plan",
   "q:campaign:send",
+  "q:campaign:dead",
   "q:message:send",
+  "q:message:dead",
   "q:contacts:import:validate",
   "q:contacts:import:commit",
   "q:reports:export",
@@ -107,7 +129,7 @@ setInterval(async () => {
   }
 }, 5000);
 
-serve(
+const server = serve(
   {
     fetch: app.fetch,
     port: config.port,
@@ -116,3 +138,18 @@ serve(
     pinoLogger.info(`Server listening on http://localhost:${info.port}`);
   },
 );
+
+const shutdown = async (signal: string) => {
+  pinoLogger.info({ signal }, "Shutting down API");
+  server.close(() => {
+    pinoLogger.info("HTTP server closed");
+  });
+  await pubSubPublisher.quit();
+  await pubSubSubscriber.quit();
+  await redis.quit();
+  await prisma.$disconnect();
+  process.exit(0);
+};
+
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));

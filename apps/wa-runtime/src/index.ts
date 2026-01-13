@@ -140,6 +140,19 @@ async function main() {
         maxRetriesPerRequest: null,
     });
 
+    const shutdown = async (signal: string) => {
+        logger.info({ signal }, "Shutting down WA runtime");
+        await socketManager.stopAll();
+        await queueRedis.quit();
+        await pubSubSubscriber.quit();
+        await pubSubPublisher.quit();
+        await redis.quit();
+        process.exit(0);
+    };
+
+    process.on("SIGTERM", () => shutdown("SIGTERM"));
+    process.on("SIGINT", () => shutdown("SIGINT"));
+
     // 1. Subscribe to commands
     // Pattern: cmd:wa-runtime
     await pubSubSubscriber.subscribe("cmd:wa-runtime");

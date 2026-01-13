@@ -200,11 +200,13 @@ export default function ExportCenter() {
                                 {queueMetrics["q:campaign:send:active"] ?? 0}, failed{" "}
                                 {queueMetrics["q:campaign:send:failed"] ?? 0})
                             </div>
+                            <div>Campaign Dead: {queueMetrics["q:campaign:dead"] ?? 0}</div>
                             <div>
                                 Message Send: {queueMetrics["q:message:send"] ?? 0} (active{" "}
                                 {queueMetrics["q:message:send:active"] ?? 0}, failed{" "}
                                 {queueMetrics["q:message:send:failed"] ?? 0})
                             </div>
+                            <div>Message Dead: {queueMetrics["q:message:dead"] ?? 0}</div>
                             <div>
                                 Import Validate: {queueMetrics["q:contacts:import:validate"] ?? 0} (active{" "}
                                 {queueMetrics["q:contacts:import:validate:active"] ?? 0}, failed{" "}

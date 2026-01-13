@@ -438,6 +438,13 @@ export class SocketManager {
             logger.warn({ waAccountId, err }, "Failed to update account on stop");
         }
     }
+
+    async stopAll() {
+        const ids = Array.from(this.sockets.keys());
+        for (const id of ids) {
+            await this.stop(id);
+        }
+    }
 }
 
 export const socketManager = new SocketManager();
