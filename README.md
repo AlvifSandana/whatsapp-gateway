@@ -2,7 +2,7 @@
 
 A robust, multi-tenant WhatsApp Gateway solution designed to manage multiple WhatsApp accounts, execute broadcast campaigns, handle auto-replies, and provide real-time connection status updates. Built with performance and scalability in mind using a modern TypeScript monorepo integration.
 
-![Dashboard Preview](https://via.placeholder.com/800x400?text=Dashboard+Preview) *<!-- Replace with actual screenshot -->*
+![Dashboard Preview](docs/assets/dashboard-preview.svg)
 
 ## 🚀 Features
 

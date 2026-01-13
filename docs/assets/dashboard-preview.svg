@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="480" viewBox="0 0 960 480">
+  <rect width="960" height="480" fill="#f3f4f6"/>
+  <rect x="80" y="60" width="800" height="360" rx="20" fill="#ffffff" stroke="#e5e7eb" stroke-width="2"/>
+  <rect x="120" y="100" width="220" height="260" rx="12" fill="#f8fafc" stroke="#e5e7eb"/>
+  <rect x="360" y="100" width="480" height="48" rx="10" fill="#e2e8f0"/>
+  <rect x="360" y="170" width="480" height="26" rx="8" fill="#e2e8f0"/>
+  <rect x="360" y="210" width="420" height="26" rx="8" fill="#e2e8f0"/>
+  <rect x="360" y="260" width="480" height="120" rx="12" fill="#f1f5f9" stroke="#e5e7eb"/>
+  <text x="120" y="55" font-family="Arial, sans-serif" font-size="18" fill="#111827">Dashboard Preview</text>
+  <text x="380" y="130" font-family="Arial, sans-serif" font-size="14" fill="#64748b">Campaign Overview</text>
+  <text x="380" y="288" font-family="Arial, sans-serif" font-size="12" fill="#64748b">Recent Activity</text>
+</svg>

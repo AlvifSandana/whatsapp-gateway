@@ -4,6 +4,7 @@ import makeWASocket, {
     fetchLatestBaileysVersion,
     isJidBroadcast,
     makeCacheableSignalKeyStore,
+    WAMessageStatus,
 } from "@whiskeysockets/baileys";
 import { redis, pubSubPublisher } from "../redis";
 import { prisma } from "@repo/db";
@@ -23,6 +24,73 @@ export class SocketManager {
         await pubSubPublisher.publish("ev:wa-runtime", JSON.stringify(event));
     }
 
+    private statusRank(status: string) {
+        if (status === "READ") return 4;
+        if (status === "DELIVERED") return 3;
+        if (status === "SENT") return 2;
+        if (status === "QUEUED") return 1;
+        return 0;
+    }
+
+    private mapStatus(input?: number | string) {
+        if (typeof input === "string") {
+            if (input.toUpperCase() === "READ") return "READ";
+            if (input.toUpperCase() === "DELIVERED") return "DELIVERED";
+            if (input.toUpperCase() === "SENT") return "SENT";
+            return null;
+        }
+
+        if (input === WAMessageStatus.READ || input === WAMessageStatus.PLAYED) return "READ";
+        if (input === WAMessageStatus.DELIVERY_ACK) return "DELIVERED";
+        if (input === WAMessageStatus.SERVER_ACK) return "SENT";
+        return null;
+    }
+
+    private async applyMessageStatus(providerMsgId: string, nextStatus: string) {
+        const message = await prisma.message.findFirst({
+            where: { providerMsgId },
+            select: {
+                id: true,
+                status: true,
+                sourceCampaignId: true,
+                contactId: true,
+                waAccountId: true,
+                workspaceId: true,
+            },
+        });
+        if (!message) return;
+
+        if (this.statusRank(nextStatus) <= this.statusRank(message.status)) return;
+
+        await prisma.message.update({
+            where: { id: message.id },
+            data: { status: nextStatus },
+        });
+        await prisma.messageEvent.create({
+            data: { messageId: message.id, event: nextStatus },
+        });
+
+        if (message.sourceCampaignId && message.contactId) {
+            await prisma.campaignTarget.updateMany({
+                where: {
+                    campaignId: message.sourceCampaignId,
+                    contactId: message.contactId,
+                },
+                data: { status: nextStatus },
+            });
+        }
+
+        await this.publishEvent("messages.status", {
+            messageId: message.id,
+            waAccountId: message.waAccountId,
+            sourceCampaignId: message.sourceCampaignId,
+            contactId: message.contactId,
+            workspaceId: message.workspaceId,
+            status: nextStatus,
+            timestamp: new Date().toISOString(),
+        });
+    }
+
     async sendMessage(waAccountId: string, to: string, message: any, dbMessageId?: string) {
         const sock = this.sockets.get(waAccountId);
         if (!sock) {
@@ -30,7 +98,7 @@ export class SocketManager {
             if (dbMessageId) {
                 await prisma.message.update({ where: { id: dbMessageId }, data: { status: "FAILED", errorCode: "NO_SOCKET" } });
             }
-            return;
+            return false;
         }
 
         try {
@@ -56,11 +124,13 @@ export class SocketManager {
                     data: { messageId: dbMessageId, event: "SENT" }
                 });
             }
+            return true;
         } catch (e) {
             logger.error({ waAccountId, err: e }, "Failed to send message");
             if (dbMessageId) {
                 await prisma.message.update({ where: { id: dbMessageId }, data: { status: "FAILED", errorMessage: String(e) } });
             }
+            return false;
         }
     }
 
@@ -69,6 +139,12 @@ export class SocketManager {
             logger.warn({ waAccountId }, "Socket already started");
             return;
         }
+
+        const accountMeta = await prisma.waAccount.findUnique({
+            where: { id: waAccountId },
+            select: { workspaceId: true },
+        });
+        const workspaceId = accountMeta?.workspaceId;
 
         logger.info({ waAccountId }, "Starting socket");
 
@@ -116,6 +192,7 @@ export class SocketManager {
                 // Publish Event
                 await this.publishEvent("numbers.status", {
                     waAccountId,
+                    workspaceId,
                     status: "QR_READY",
                     qr
                 });
@@ -140,9 +217,11 @@ export class SocketManager {
                     where: { id: waAccountId },
                     data: { status: "DISCONNECTED", lastSeenAt: new Date() }
                 });
+                await redis.srem("wa:connected", waAccountId);
 
                 await this.publishEvent("numbers.status", {
                     waAccountId,
+                    workspaceId,
                     status: "DISCONNECTED",
                     reason
                 });
@@ -173,9 +252,11 @@ export class SocketManager {
                     where: { id: waAccountId },
                     data: { status: "CONNECTED", lastSeenAt: new Date() }
                 });
+                await redis.sadd("wa:connected", waAccountId);
 
                 await this.publishEvent("numbers.status", {
                     waAccountId,
+                    workspaceId,
                     status: "CONNECTED"
                 });
             }
@@ -191,10 +272,60 @@ export class SocketManager {
                 const remoteJid = msg.key.remoteJid;
                 if (!remoteJid || isJidBroadcast(remoteJid)) continue;
 
+                const providerMsgId = msg.key.id || null;
+                const phoneE164 = remoteJid.split("@")[0];
+
                 // Extract text
                 const text = msg.message.conversation ||
                     msg.message.extendedTextMessage?.text ||
                     msg.message.imageMessage?.caption || "";
+
+                if (workspaceId && phoneE164) {
+                    const contact = await prisma.contact.upsert({
+                        where: {
+                            workspaceId_phoneE164: {
+                                workspaceId,
+                                phoneE164,
+                            },
+                        },
+                        create: {
+                            workspaceId,
+                            phoneE164,
+                        },
+                        update: {},
+                    });
+
+                    if (providerMsgId) {
+                        const existing = await prisma.message.findFirst({
+                            where: { providerMsgId, waAccountId },
+                            select: { id: true },
+                        });
+                        if (!existing) {
+                            const incoming = await prisma.message.create({
+                                data: {
+                                    workspaceId,
+                                    waAccountId,
+                                    contactId: contact.id,
+                                    direction: "IN",
+                                    status: "DELIVERED",
+                                    type: "text",
+                                    payload: { type: "text", text },
+                                    providerMsgId,
+                                },
+                            });
+                            await this.publishEvent("messages.incoming", {
+                                messageId: incoming.id,
+                                waAccountId,
+                                contactId: contact.id,
+                                workspaceId,
+                                direction: "IN",
+                                status: "DELIVERED",
+                                payload: incoming.payload,
+                                createdAt: incoming.createdAt,
+                            });
+                        }
+                    }
+                }
 
                 if (text) {
                     const autoReply = new AutoReplyService(logger);
@@ -207,6 +338,34 @@ export class SocketManager {
                 }
             }
         });
+
+        sock.ev.on("messages.update", async (updates) => {
+            for (const update of updates) {
+                const key = update.key;
+                if (!key?.id) continue;
+                if (!key.fromMe) continue;
+
+                const nextStatus = this.mapStatus(update.status as number | string | undefined);
+                if (!nextStatus) continue;
+
+                await this.applyMessageStatus(key.id, nextStatus);
+            }
+        });
+
+        sock.ev.on("message-receipt.update", async (updates) => {
+            for (const update of updates) {
+                const key = update.key;
+                if (!key?.id) continue;
+                if (!key.fromMe) continue;
+
+                const receiptStatus = (update.receipt?.readTimestamp && "READ") ||
+                    (update.receipt?.deliveryTimestamp && "DELIVERED") ||
+                    null;
+                if (!receiptStatus) continue;
+
+                await this.applyMessageStatus(key.id, receiptStatus);
+            }
+        });
     }
 
     async stop(waAccountId: string) {
@@ -215,6 +374,20 @@ export class SocketManager {
             sock.end(undefined);
             this.sockets.delete(waAccountId);
             await redis.del(`lock:wa:${waAccountId}`);
+        }
+        await redis.srem("wa:connected", waAccountId);
+        try {
+            await prisma.waAccount.update({
+                where: { id: waAccountId },
+                data: { status: "DISCONNECTED", lastSeenAt: new Date() },
+            });
+            await this.publishEvent("numbers.status", {
+                waAccountId,
+                workspaceId,
+                status: "DISCONNECTED",
+            });
+        } catch (err) {
+            logger.warn({ waAccountId, err }, "Failed to update account on stop");
         }
     }
 }

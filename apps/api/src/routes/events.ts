@@ -5,10 +5,19 @@ import { eventBus } from "../redis";
 const app = new Hono();
 
 app.get("/", (c) => {
+    const auth = c.get("auth") as any;
+    const workspaceId = auth.workspaceId;
     return streamSSE(c, async (stream) => {
         const listener = (channel: string, message: string) => {
             // We only care about events relevant to frontend
             // Assuming all published events are JSON
+            try {
+                const parsed = JSON.parse(message);
+                const eventWorkspaceId = parsed?.payload?.workspaceId;
+                if (eventWorkspaceId && eventWorkspaceId !== workspaceId) return;
+            } catch (err) {
+                console.error("Failed to parse SSE event", err);
+            }
             stream.writeSSE({
                 data: message,
                 event: "message",
