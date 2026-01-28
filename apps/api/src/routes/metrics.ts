@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { redis } from "../redis";
+import { metricsEndpoint } from "@repo/monitoring";
 
 const app = new Hono();
 
@@ -33,4 +34,7 @@ app.get("/", async (c) => {
   return c.json({ data: { queues } });
 });
 
+app.get("/prometheus", metricsEndpoint);
+
 export default app;
+

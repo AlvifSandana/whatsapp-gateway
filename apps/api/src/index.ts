@@ -12,10 +12,19 @@ import { rateLimitMiddleware } from "./middleware/rate-limit";
 import { securityHeadersMiddleware } from "./middleware/security-headers";
 import { requestIdMiddleware } from "./middleware/request-id";
 import { prisma } from "@repo/db";
+import { metricsMiddleware, initSentry, sentryErrorHandler } from "@repo/monitoring";
+import { pinoLogger, pinoLoggerMiddleware } from "./middleware/pino-logger";
 
-const pinoLogger = pino({ level: config.logLevel });
+
+initSentry(config.sentryDsn, config.nodeEnv);
+
+
 
 const app = new Hono();
+
+
+app.onError(sentryErrorHandler);
+
 
 import eventsRoutes from "./routes/events";
 import contactsRoutes from "./routes/contacts";
@@ -31,11 +40,16 @@ import rbacRoutes from "./routes/rbac";
 import reportsRoutes from "./routes/reports";
 import queuesRoutes from "./routes/queues";
 import metricsRoutes from "./routes/metrics";
+import analyticsRoutes from "./routes/analytics";
+
 import { startExportWorker, startContactImportWorker } from "@repo/workers";
 import { pubSubPublisher, pubSubSubscriber, redis } from "./redis";
 
 app.use("*", requestIdMiddleware);
-app.use("*", logger());
+app.use("*", metricsMiddleware);
+app.use("*", pinoLoggerMiddleware);
+
+
 app.use(
   "*",
   cors({
@@ -49,13 +63,29 @@ app.use("*", securityHeadersMiddleware);
 app.get("/health", (c) => c.json({ status: "ok" }));
 app.get("/health/ready", async (c) => {
   try {
+    const start = Date.now();
     await prisma.$queryRaw`SELECT 1`;
+    const dbLatency = Date.now() - start;
+
     await redis.ping();
-    return c.json({ status: "ready" });
+
+    return c.json({
+      status: "ready",
+      timestamp: new Date().toISOString(),
+      version: config.version || "1.0.0",
+      checks: {
+        db: { status: "up", latencyMs: dbLatency },
+        redis: { status: "up" },
+        uptime: process.uptime(),
+        memory: process.memoryUsage()
+      }
+    });
   } catch (err) {
-    return c.json({ status: "not_ready" }, 503);
+    pinoLogger.error({ err }, "Health check failed");
+    return c.json({ status: "not_ready", error: String(err) }, 503);
   }
 });
+
 
 app.use("/v1/*", rateLimitMiddleware);
 app.use("/v1/*", authMiddleware);
@@ -76,7 +106,9 @@ app.route("/v1/workspace", workspaceRoutes);
 app.route("/v1/rbac", rbacRoutes);
 app.route("/v1/reports", reportsRoutes);
 app.route("/v1/queues", queuesRoutes);
+app.route("/v1/analytics", analyticsRoutes);
 app.route("/v1/metrics", metricsRoutes);
+
 
 pinoLogger.info(`Server is starting on port ${config.port}`);
 
@@ -141,15 +173,25 @@ const server = serve(
 
 const shutdown = async (signal: string) => {
   pinoLogger.info({ signal }, "Shutting down API");
-  server.close(() => {
-    pinoLogger.info("HTTP server closed");
-  });
-  await pubSubPublisher.quit();
-  await pubSubSubscriber.quit();
-  await redis.quit();
-  await prisma.$disconnect();
-  process.exit(0);
+  const timer = setTimeout(() => {
+    pinoLogger.warn("Shutdown timed out, forcing exit");
+    process.exit(1);
+  }, 10000);
+
+  try {
+    server.close(() => {
+      pinoLogger.info("HTTP server closed");
+    });
+    await pubSubPublisher.quit();
+    await pubSubSubscriber.quit();
+    await redis.quit();
+    await prisma.$disconnect();
+  } finally {
+    clearTimeout(timer);
+    process.exit(0);
+  }
 };
+
 
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT", () => shutdown("SIGINT"));

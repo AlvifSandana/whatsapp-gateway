@@ -3,7 +3,11 @@ import { redis, pubSubPublisher, pubSubSubscriber } from "./redis";
 import { socketManager } from "./socket/manager";
 import { prisma } from "@repo/db";
 import { logAudit } from "@repo/shared";
+import { initSentry } from "@repo/monitoring";
 import pino from "pino";
+
+initSentry(config.sentryDsn, config.nodeEnv);
+
 import Redis from "ioredis";
 
 const logger = pino({ level: config.logLevel });
@@ -142,13 +146,23 @@ async function main() {
 
     const shutdown = async (signal: string) => {
         logger.info({ signal }, "Shutting down WA runtime");
-        await socketManager.stopAll();
-        await queueRedis.quit();
-        await pubSubSubscriber.quit();
-        await pubSubPublisher.quit();
-        await redis.quit();
-        process.exit(0);
+        const timer = setTimeout(() => {
+            logger.warn("Shutdown timed out, forcing exit");
+            process.exit(1);
+        }, 10000);
+
+        try {
+            await socketManager.stopAll();
+            await queueRedis.quit();
+            await pubSubSubscriber.quit();
+            await pubSubPublisher.quit();
+            await redis.quit();
+        } finally {
+            clearTimeout(timer);
+            process.exit(0);
+        }
     };
+
 
     process.on("SIGTERM", () => shutdown("SIGTERM"));
     process.on("SIGINT", () => shutdown("SIGINT"));
@@ -256,6 +270,8 @@ async function main() {
                 }
             } catch (err) {
                 logger.error(err, "Error processing command");
+                import('@sentry/node').then(Sentry => Sentry.captureException(err));
+
                 await publishAck((() => {
                     try {
                         const parsed = JSON.parse(message);
@@ -309,9 +325,16 @@ async function main() {
         }
     };
 
-    const processCampaignJob = async (payload: { campaignId: string; contactId: string }) => {
+    const campaignCache = new Map<string, { data: any, ts: number }>();
+    const CAMPAIGN_CACHE_TTL = 30000; // 30s
+
+    const getCampaignCached = async (id: string) => {
+        const cached = campaignCache.get(id);
+        if (cached && (Date.now() - cached.ts) < CAMPAIGN_CACHE_TTL) {
+            return cached.data;
+        }
         const campaign = await prisma.campaign.findUnique({
-            where: { id: payload.campaignId },
+            where: { id },
             select: {
                 id: true,
                 status: true,
@@ -320,78 +343,116 @@ async function main() {
                 workspaceId: true,
             },
         });
-        if (!campaign) return;
-
-        if (campaign.status === "PAUSED") {
-            await sleep(1000);
-            await queueRedis.rpush("q:campaign:send", JSON.stringify(payload));
-            return;
+        if (campaign) {
+            campaignCache.set(id, { data: campaign, ts: Date.now() });
         }
-        if (campaign.status === "CANCELED") {
-            await prisma.campaignTarget.updateMany({
-                where: { campaignId: campaign.id, contactId: payload.contactId, status: "QUEUED" },
-                data: { status: "CANCELED" },
-            });
-            return;
-        }
-        if (campaign.status !== "PROCESSING") return;
+        return campaign;
+    };
 
-        const contact = await prisma.contact.findUnique({
-            where: { id: payload.contactId },
-            select: { phoneE164: true },
-        });
-        if (!contact) return;
-
-        const waAccountId = campaign.waAccountId || (await pickAccount());
-        if (!waAccountId) {
-            await sleep(1000);
-            await queueRedis.rpush("q:campaign:send", JSON.stringify(payload));
-            return;
-        }
-
-        await canSend(waAccountId);
-
-        await redis.incr(`wa:load:${waAccountId}`);
+    const updateAnalytics = async (workspaceId: string, field: 'sentCount' | 'failedCount' | 'deliveredCount' | 'readCount', increment = 1) => {
+        const today = new Date();
+        today.setUTCHours(0, 0, 0, 0);
         try {
-            const message = await prisma.message.create({
-                data: {
-                    workspaceId: campaign.workspaceId,
+            await prisma.dailyAnalytics.upsert({
+                where: { workspaceId_date: { workspaceId, date: today } },
+                create: { workspaceId, date: today, [field]: increment },
+                update: { [field]: { increment } },
+            });
+        } catch (err) {
+            logger.error({ err, workspaceId, field }, "Failed to update daily analytics");
+        }
+    };
+
+    const processCampaignJob = async (payload: { campaignId: string; contactId: string }) => {
+        const lockKey = `lock:campaign:${payload.campaignId}:${payload.contactId}`;
+        const acquired = await redis.set(lockKey, "1", "PX", 30000, "NX");
+        if (!acquired) return; // Already being processed by another worker
+
+        try {
+            const campaign = await getCampaignCached(payload.campaignId);
+            if (!campaign) return;
+
+            if (campaign.status === "PAUSED") {
+                await sleep(1000);
+                await queueRedis.rpush("q:campaign:send", JSON.stringify(payload));
+                return;
+            }
+            if (campaign.status === "CANCELED") {
+                await prisma.campaignTarget.updateMany({
+                    where: { campaignId: campaign.id, contactId: payload.contactId, status: "QUEUED" },
+                    data: { status: "CANCELED" },
+                });
+                return;
+            }
+            if (campaign.status !== "PROCESSING") return;
+
+            // Idempotency: check if already sent or processing
+            const target = await prisma.campaignTarget.findUnique({
+                where: { campaignId_contactId: { campaignId: campaign.id, contactId: payload.contactId } },
+                select: { status: true },
+            });
+            if (!target || target.status !== "QUEUED") return;
+
+            const contact = await prisma.contact.findUnique({
+                where: { id: payload.contactId },
+                select: { phoneE164: true },
+            });
+            if (!contact) return;
+
+            const waAccountId = campaign.waAccountId || (await pickAccount());
+            if (!waAccountId) {
+                await sleep(1000);
+                await queueRedis.rpush("q:campaign:send", JSON.stringify(payload));
+                return;
+            }
+
+            await canSend(waAccountId);
+
+            await redis.incr(`wa:load:${waAccountId}`);
+            try {
+                const message = await prisma.message.create({
+                    data: {
+                        workspaceId: campaign.workspaceId,
+                        waAccountId,
+                        contactId: payload.contactId,
+                        direction: "OUT",
+                        status: "QUEUED",
+                        type: "text",
+                        payload: campaign.payload ?? {},
+                        sourceCampaignId: campaign.id,
+                    },
+                });
+
+                const ok = await socketManager.sendMessage(
                     waAccountId,
-                    contactId: payload.contactId,
-                    direction: "OUT",
-                    status: "QUEUED",
-                    type: "text",
-                    payload: campaign.payload ?? {},
-                    sourceCampaignId: campaign.id,
-                },
-            });
+                    contact.phoneE164,
+                    campaign.payload,
+                    message.id,
+                );
 
-            const ok = await socketManager.sendMessage(
-                waAccountId,
-                contact.phoneE164,
-                campaign.payload,
-                message.id,
-            );
+                const attemptKey = `retry:campaign:${campaign.id}:${payload.contactId}`;
+                const attempt = Number(await redis.incr(attemptKey));
+                await redis.expire(attemptKey, 60 * 60 * 24);
+                const maxAttempts = config.campaignSendRetryMax;
 
-            const attemptKey = `retry:campaign:${campaign.id}:${payload.contactId}`;
-            const attempt = Number(await redis.incr(attemptKey));
-            await redis.expire(attemptKey, 60 * 60 * 24);
-            const maxAttempts = config.campaignSendRetryMax;
+                await prisma.campaignTarget.updateMany({
+                    where: {
+                        campaignId: campaign.id,
+                        contactId: payload.contactId,
+                    },
+                    data: {
+                        status: ok ? "SENT" : attempt >= maxAttempts ? "FAILED" : "QUEUED",
+                        lastTryAt: new Date(),
+                        attemptCount: { increment: 1 },
+                        ...(ok ? {} : { lastError: "SEND_FAILED" }),
+                    },
+                });
 
-            await prisma.campaignTarget.updateMany({
-                where: {
-                    campaignId: campaign.id,
-                    contactId: payload.contactId,
-                },
-                data: {
-                    status: ok ? "SENT" : attempt >= maxAttempts ? "FAILED" : "QUEUED",
-                    lastTryAt: new Date(),
-                    attemptCount: { increment: 1 },
-                    ...(ok ? {} : { lastError: "SEND_FAILED" }),
-                },
-            });
-
-                if (!ok) {
+                if (ok) {
+                    await updateAnalytics(campaign.workspaceId, 'sentCount');
+                    await redis.del(attemptKey);
+                } else {
+                    await updateAnalytics(campaign.workspaceId, 'failedCount');
                     if (attempt >= maxAttempts) {
                         await redis.del(attemptKey);
                         await queueRedis.rpush(
@@ -403,33 +464,35 @@ async function main() {
                             }),
                         );
                     } else {
-                    const delay = config.campaignSendRetryBaseDelayMs * Math.pow(2, attempt - 1);
-                    const jitter = Math.floor(Math.random() * 200);
-                    setTimeout(() => {
-                        queueRedis
-                            .rpush("q:campaign:send", JSON.stringify(payload))
-                            .catch((err) => logger.error({ err }, "Failed to requeue campaign job"));
-                    }, delay + jitter);
+                        const delay = config.campaignSendRetryBaseDelayMs * Math.pow(2, attempt - 1);
+                        const jitter = Math.floor(Math.random() * 200);
+                        setTimeout(() => {
+                            queueRedis
+                                .rpush("q:campaign:send", JSON.stringify(payload))
+                                .catch((err) => logger.error({ err }, "Failed to requeue campaign job"));
+                        }, delay + jitter);
+                    }
                 }
-            } else {
-                await redis.del(attemptKey);
+                await markCampaignDirty(campaign.workspaceId, campaign.id);
+            } finally {
+                await redis.decr(`wa:load:${waAccountId}`);
             }
-            await markCampaignDirty(campaign.workspaceId, campaign.id);
-        } finally {
-            await redis.decr(`wa:load:${waAccountId}`);
-        }
 
-        const remaining = await prisma.campaignTarget.count({
-            where: { campaignId: campaign.id, status: "QUEUED" },
-        });
-        if (remaining === 0) {
-            await prisma.campaign.update({
-                where: { id: campaign.id },
-                data: { status: "COMPLETED" },
+            const remaining = await prisma.campaignTarget.count({
+                where: { campaignId: campaign.id, status: "QUEUED" },
             });
-            await markCampaignDirty(campaign.workspaceId, campaign.id);
+            if (remaining === 0) {
+                await prisma.campaign.update({
+                    where: { id: campaign.id },
+                    data: { status: "COMPLETED" },
+                });
+                await markCampaignDirty(campaign.workspaceId, campaign.id);
+            }
+        } finally {
+            await redis.del(lockKey);
         }
     };
+
 
     const processCampaignPlan = async (payload: { campaignId: string }) => {
         const campaign = await prisma.campaign.findUnique({
@@ -539,22 +602,22 @@ async function main() {
                 message.payload,
                 message.id,
             );
-                if (!ok) {
-                    if (attempt >= maxAttempts) {
-                        await prisma.message.update({
-                            where: { id: message.id },
-                            data: { status: "FAILED", errorCode: "SEND_FAILED" },
-                        });
-                        await redis.del(retryKey);
-                        await queueRedis.rpush(
-                            "q:message:dead",
-                            JSON.stringify({
-                                messageId: message.id,
-                                waAccountId,
-                                reason: "SEND_FAILED",
-                            }),
-                        );
-                    } else {
+            if (!ok) {
+                if (attempt >= maxAttempts) {
+                    await prisma.message.update({
+                        where: { id: message.id },
+                        data: { status: "FAILED", errorCode: "SEND_FAILED" },
+                    });
+                    await redis.del(retryKey);
+                    await queueRedis.rpush(
+                        "q:message:dead",
+                        JSON.stringify({
+                            messageId: message.id,
+                            waAccountId,
+                            reason: "SEND_FAILED",
+                        }),
+                    );
+                } else {
                     const delay = config.messageSendRetryBaseDelayMs * Math.pow(2, attempt - 1);
                     const jitter = Math.floor(Math.random() * 200);
                     await prisma.message.update({

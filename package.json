@@ -4,7 +4,10 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "vitest",
+    "test:ui": "vitest --ui",
+    "test:coverage": "vitest --coverage",
+    "test:integration": "vitest --config vitest.config.ts",
     "dev": "pnpm -r --parallel dev",
     "dev:api": "pnpm --filter api dev",
     "dev:dashboard": "pnpm --filter dashboard dev",

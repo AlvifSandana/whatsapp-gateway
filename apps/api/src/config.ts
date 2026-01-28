@@ -19,4 +19,9 @@ export const config = {
     exportDownloadSecret: process.env.EXPORT_DOWNLOAD_SECRET || "dev-export-secret",
     rateLimitWindowSeconds: Number(process.env.RATE_LIMIT_WINDOW_SECONDS || 60),
     rateLimitMax: Number(process.env.RATE_LIMIT_MAX || 120),
+    version: process.env.APP_VERSION || "1.0.0",
+    nodeEnv: process.env.NODE_ENV || "development",
+    sentryDsn: process.env.SENTRY_DSN || "",
 };
+
+

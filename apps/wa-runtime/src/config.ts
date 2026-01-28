@@ -27,4 +27,7 @@ export const config = {
     campaignSendRetryBaseDelayMs: Number(process.env.CAMPAIGN_SEND_RETRY_BASE_DELAY_MS || 1000),
     messageSendRetryMax: Number(process.env.MESSAGE_SEND_RETRY_MAX || 5),
     messageSendRetryBaseDelayMs: Number(process.env.MESSAGE_SEND_RETRY_BASE_DELAY_MS || 1000),
+    sentryDsn: process.env.SENTRY_DSN || "",
+    nodeEnv: process.env.NODE_ENV || "development",
 };
+

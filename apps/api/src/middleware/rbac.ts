@@ -67,7 +67,9 @@ export const getRequiredPermission = (method: string, path: string) => {
   }
 
   if (is(/^\/v1\/queues\/dlq(\/|$)/)) return "reports:read";
+  if (is(/^\/v1\/analytics(\/|$)/)) return "reports:read";
   if (is(/^\/v1\/metrics(\/|$)/)) return "audit:read";
+
 
   return null;
 };

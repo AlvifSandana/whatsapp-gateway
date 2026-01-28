@@ -15,6 +15,23 @@ Belum Diimplementasikan (Audit Singkat)
 - [x] Dashboard root: landing page + privacy policy + ToS.
 - [x] README screenshot: updated with local preview asset.
 
-Selesai
+## Selesai
 
 - [x] Manual messaging / inbox: inbox + kirim manual + SSE + hapus percakapan.
+- [x] Production Readiness (Phase 1):
+    - [x] Vitest testing infrastructure & basic integration tests.
+    - [x] Prometheus metrics monitoring (`@repo/monitoring`).
+    - [x] Centralized Zod validation (`@repo/validation`).
+    - [x] Better Rate Limiting (workspace-aware).
+    - [x] Enhanced Health Checks with system metrics.
+    - [x] Graceful Shutdown with timeout guards.
+    - [x] Dockerization (Dockerfiles + `docker-compose.prod.yml`).
+    - [x] Campaign processing optimization (caching).
+    - [x] CI/CD Pipeline (GitHub Actions).
+    - [x] Sentry Integration for error tracking.
+
+## Pending Production Readiness
+- [ ] 100% Test Coverage for critical paths.
+- [ ] Advanced Rate Limiting (Redis-based sliding window).
+
+

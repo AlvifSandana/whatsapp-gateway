@@ -23,6 +23,8 @@ model Workspace {
   exports         Export[]
   auditLogs       AuditLog[]
   messages        Message[]
+  dailyAnalytics  DailyAnalytics[]
+
 
   @@map("workspaces")
 }
@@ -368,4 +370,20 @@ model Export {
   workspace   Workspace @relation(fields: [workspaceId], references: [id])
 
   @@map("exports")
+}
+
+model DailyAnalytics {
+  id           String   @id @default(uuid())
+  workspaceId  String   @map("workspace_id")
+  date         DateTime @db.Date
+  sentCount    Int      @default(0) @map("sent_count")
+  failedCount  Int      @default(0) @map("failed_count")
+  deliveredCount Int    @default(0) @map("delivered_count")
+  readCount    Int      @default(0) @map("read_count")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  workspace    Workspace @relation(fields: [workspaceId], references: [id])
+
+  @@unique([workspaceId, date])
+  @@map("daily_analytics")
 }

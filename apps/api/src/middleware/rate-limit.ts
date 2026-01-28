@@ -12,24 +12,52 @@ const getClientIp = (c: Context) => {
 
 export const rateLimitMiddleware = async (c: Context, next: Next) => {
   const path = c.req.path;
-  if (path.startsWith("/health") || path.startsWith("/v1/events")) {
+  if (path.startsWith("/health") || path.startsWith("/v1/events") || path.startsWith("/v1/metrics")) {
     return next();
   }
 
-  const ip = getClientIp(c);
-  const windowSec = config.rateLimitWindowSeconds;
-  const max = config.rateLimitMax;
-  if (!windowSec || !max || max <= 0) return next();
+  const auth = c.get("auth") as any;
+  const identifier = auth?.workspaceId ? `ws:${auth.workspaceId}` : auth?.userId ? `u:${auth.userId}` : `ip:${getClientIp(c)}`;
 
-  const key = `rl:api:${ip}:${Math.floor(Date.now() / (windowSec * 1000))}`;
-  const count = await redis.incr(key);
-  if (count === 1) {
-    await redis.expire(key, windowSec);
+  const windowSec = config.rateLimitWindowSeconds || 60;
+  const max = config.rateLimitMax || 100;
+  if (max <= 0) return next();
+
+  const key = `rl:sliding:${identifier}`;
+  const now = Date.now();
+  const windowMs = windowSec * 1000;
+  const minTimestamp = now - windowMs;
+
+  try {
+    const multi = redis.multi();
+    multi.zremrangebyscore(key, 0, minTimestamp);
+    multi.zadd(key, now, `${now}-${Math.random()}`);
+    multi.zcard(key);
+    multi.expire(key, windowSec + 1);
+
+    const results = await multi.exec();
+    if (!results) return next();
+
+    // results[2][1] is the output of zcard
+    const count = results[2][1] as number;
+
+    if (count > max) {
+      return c.json({
+        error: "Rate limit exceeded",
+        retryAfter: windowSec,
+        limit: max,
+        remaining: 0
+      }, 429);
+    }
+
+    c.header("X-RateLimit-Limit", max.toString());
+    c.header("X-RateLimit-Remaining", Math.max(0, max - count).toString());
+
+    return next();
+  } catch (err) {
+    console.error("Rate limit check failed", err);
+    return next();
   }
-
-  if (count > max) {
-    return c.json({ error: "Rate limit exceeded" }, 429);
-  }
-
-  return next();
 };
+
+
